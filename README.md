@@ -1,42 +1,46 @@
 # o3gen
 
-A proc-macro to generate Rust types from OpenAPI 3.0 specifications with support for renaming and opt-in derives.
+Generate idiomatic, IDE-friendly Rust types from OpenAPI 3.0 specifications.
 
-## Features
-
-- **Type Renaming**: Map OpenAPI schema names to idiomatic Rust names.
-- **Opt-in Derives**: Add `Eq`, `PartialOrd`, `Ord`, and `Hash` to specific types where valid.
-- **Smart anyOf Handling**: Generates untagged enums for `anyOf` components with support for string-like variants.
-- **Comprehensive Defaults**: All types derive `Debug`, `Clone`, `Serialize`, `Deserialize`, `PartialEq`, and `Default` by default.
-
-## Usage
+## Quick Start
 
 Add `o3gen` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-o3gen = "0.1.0"
-```
+serde = { version = "1.0", features = ["derive"] }
 
-In your Rust code:
+[build-dependencies]
+o3gen = "0.1"
+```
 
 ```rust
-mod generated {
-    o3gen::generate_types! {
-        path = "path/to/openapi.json",
-        rename = {
-            "OriginalSchemaName" => "IdiomaticName",
-            "AnotherSchema" => "BetterName"
-        },
-        derive_extra = {
-            "IdiomaticName" => ["Eq", "PartialOrd", "Ord", "Hash"]
-        }
-    }
+// build.rs
+fn main() {
+    o3gen::Generator::builder("openapi.json")
+        .rename("User", "AppUser")
+        .write_to_out_dir("types.rs")
+        .expect("Failed to generate types");
 }
-
-pub use generated::types::*;
 ```
+
+
+```rust
+include!(concat!(env!("OUT_DIR"), "/types.rs"));
+use types::*; // types are generated inside a `types` module
+
+fn main() {
+    let user = AppUser { id: 1, name: "Alice".into(), status: None };
+    println!("Hello, {}!", user.name);
+}
+```
+
+## Features
+
+- **Full IDE Support**: Works perfectly with `rust-analyzer` (Go to Definition, Auto-complete).
+- **Fluent API**: Easy renaming and extra derives (`.rename("A", "B").derive_extra("B", ["Hash"])`).
+- **Idiomatic Rust**: Handles `anyOf` safely, wraps optional fields in `Option`, and implements `as_str()`/`Display`.
 
 ## License
 
-This project is licensed under the MIT License.
+MIT

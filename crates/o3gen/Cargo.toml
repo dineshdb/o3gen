@@ -1,9 +1,10 @@
 [package]
 name = "o3gen"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "A library to generate Rust types from OpenAPI 3.0 specifications with renaming support."
+readme = "../../README.md"
 repository = "https://github.com/dineshdb/o3gen"
 keywords = ["openapi", "codegen", "types"]
 categories = ["development-tools::ffi", "api-bindings"]
