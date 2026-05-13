@@ -30,6 +30,25 @@
           }
         }
       },
+      "Base": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" }
+        },
+        "required": ["id"]
+      },
+      "Extended": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Base" },
+          {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" }
+            },
+            "required": ["name"]
+          }
+        ]
+      },
       "Role": {
         "anyOf": [
           { "$ref": "#/components/schemas/User" },

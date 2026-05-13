@@ -1,13 +1,13 @@
 use o3gen::Generator;
 
 fn main() {
-    // 1. Standard types
-    Generator::builder("fixtures/test_spec.json")
+    // Generate types from the comprehensive spec
+    Generator::builder("fixtures/comprehensive_spec.json")
         .write_to_out_dir("types.rs")
         .expect("Failed to generate types.rs");
 
-    // 2. Renamed types
-    Generator::builder("fixtures/test_spec.json")
+    // Generate renamed types from the same comprehensive spec
+    Generator::builder("fixtures/comprehensive_spec.json")
         .rename("User", "AppUser")
         .rename("Role", "AppRole")
         .rename("Status", "AppStatus")
@@ -19,4 +19,5 @@ fn main() {
         .expect("Failed to generate renamed_types.rs");
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=fixtures/comprehensive_spec.json");
 }
