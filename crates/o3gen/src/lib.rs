@@ -1,5 +1,6 @@
 pub mod any_of;
 pub mod config;
+pub mod flatten;
 pub mod generator;
 pub mod helpers;
 pub mod object;

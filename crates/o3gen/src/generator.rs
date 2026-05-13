@@ -71,8 +71,10 @@ impl Generator {
             )
         })?;
 
-        let openapi: OpenAPI = serde_json::from_str(&spec_str)
+        let mut openapi: OpenAPI = serde_json::from_str(&spec_str)
             .map_err(|e| format!("Failed to parse OpenAPI JSON: {e}"))?;
+
+        crate::flatten::flatten(&mut openapi, &self.config.rename);
 
         self.schemas.clear();
         if let Some(components) = &openapi.components {
@@ -172,14 +174,9 @@ impl Generator {
         match &schema.schema_kind {
             SchemaKind::Type(Type::Object(obj)) => {
                 let derives = self.get_derives(name, false);
-                generate_object_tokens(
-                    name,
-                    &ident,
-                    obj,
-                    &derives,
-                    &self.config.rename,
-                    &mut |n, s| self.generate_schema_tokens(n, s),
-                )
+                generate_object_tokens(&ident, obj, &derives, &self.config.rename, &mut |n, s| {
+                    self.generate_schema_tokens(n, s)
+                })
             }
             SchemaKind::Type(Type::String(s)) => {
                 let derives = self.get_derives(name, false);
@@ -187,26 +184,18 @@ impl Generator {
             }
             SchemaKind::AnyOf { any_of } => {
                 let derives = self.get_derives(name, true);
-                let schemas = self.schemas.clone();
                 generate_any_of_tokens(
                     name,
                     &ident,
                     any_of,
                     &derives,
                     &self.config.rename,
-                    &mut |n, s| {
-                        if let Some(resolved) = schemas.get(n) {
-                            self.generate_schema_tokens(n, resolved)
-                        } else {
-                            self.generate_schema_tokens(n, s)
-                        }
-                    },
+                    &mut |_, _| Ok(TokenStream::new()),
                 )
             }
             SchemaKind::AllOf { all_of } => {
                 let derives = self.get_derives(name, false);
                 generate_all_of_tokens(
-                    name,
                     &ident,
                     all_of,
                     &derives,
