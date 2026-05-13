@@ -73,6 +73,41 @@
             }
           }
         ]
+      },
+      "UserWithAddress": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "name": { "type": "string" },
+          "address": {
+            "type": "object",
+            "properties": {
+              "street": { "type": "string" },
+              "city": { "type": "string" },
+              "zip": { "type": "string" }
+            },
+            "required": ["street", "city"]
+          }
+        },
+        "required": ["id", "name"]
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "order_id": { "type": "string" },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "product_name": { "type": "string" },
+                "quantity": { "type": "integer" }
+              },
+              "required": ["product_name"]
+            }
+          }
+        },
+        "required": ["order_id"]
       }
     }
   }

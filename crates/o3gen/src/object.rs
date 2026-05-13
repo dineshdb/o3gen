@@ -4,18 +4,22 @@ use quote::quote;
 use std::collections::HashMap;
 use syn::Ident;
 
-use crate::helpers::{get_rust_type_tokens_boxed, to_ident};
+use crate::helpers::{get_rust_type_tokens_boxed, to_ident, to_pascal_case};
 
-#[must_use]
+/// # Errors
+///
+/// Returns an error if generation of inline types fails.
 #[allow(clippy::implicit_hasher)]
 pub fn generate_object_tokens(
-    _name: &str,
+    name: &str,
     ident: &Ident,
     obj: &ObjectType,
     derives: &TokenStream,
     rename: &HashMap<String, String>,
-) -> TokenStream {
+    generate_inline: &mut impl FnMut(&str, &ReferenceOr<Schema>) -> Result<TokenStream, String>,
+) -> Result<TokenStream, String> {
     let mut fields = TokenStream::new();
+    let mut extra_types = TokenStream::new();
     let mut prop_names: Vec<_> = obj.properties.keys().collect();
     prop_names.sort();
 
@@ -24,30 +28,41 @@ pub fn generate_object_tokens(
             continue;
         };
         let prop_ident = to_ident(prop_name);
-        let mut prop_type = get_rust_type_tokens_boxed(prop_ref, rename);
+        let mut prop_type = resolve_property_type(
+            name,
+            prop_name,
+            prop_ref,
+            rename,
+            &mut extra_types,
+            generate_inline,
+        )?;
         if !obj.required.contains(prop_name) {
             prop_type = quote! { Option<#prop_type> };
         }
         fields.extend(quote! { pub #prop_ident: #prop_type, });
     }
 
-    quote! {
+    Ok(quote! {
+        #extra_types
         #derives
         #[serde(deny_unknown_fields)]
         pub struct #ident { #fields }
-    }
+    })
 }
 
-#[must_use]
+/// # Errors
+///
+/// Returns an error if generation of inline types fails.
 #[allow(clippy::implicit_hasher)]
 pub fn generate_all_of_tokens(
-    _name: &str,
+    name: &str,
     ident: &Ident,
     all_of: &[ReferenceOr<Schema>],
     derives: &TokenStream,
     rename: &HashMap<String, String>,
     schemas: &HashMap<String, ReferenceOr<Schema>>,
-) -> TokenStream {
+    generate_inline: &mut impl FnMut(&str, &ReferenceOr<Schema>) -> Result<TokenStream, String>,
+) -> Result<TokenStream, String> {
     let mut properties = HashMap::new();
     let mut required = Vec::new();
 
@@ -56,6 +71,7 @@ pub fn generate_all_of_tokens(
     }
 
     let mut fields = TokenStream::new();
+    let mut extra_types = TokenStream::new();
     let mut prop_names: Vec<_> = properties.keys().collect();
     prop_names.sort();
 
@@ -64,17 +80,68 @@ pub fn generate_all_of_tokens(
             continue;
         };
         let prop_ident = to_ident(prop_name);
-        let mut prop_type = get_rust_type_tokens_boxed(prop_ref, rename);
+        let mut prop_type = resolve_property_type(
+            name,
+            prop_name,
+            prop_ref,
+            rename,
+            &mut extra_types,
+            generate_inline,
+        )?;
         if !required.contains(prop_name) {
             prop_type = quote! { Option<#prop_type> };
         }
         fields.extend(quote! { pub #prop_ident: #prop_type, });
     }
 
-    quote! {
+    Ok(quote! {
+        #extra_types
         #derives
         #[serde(deny_unknown_fields)]
         pub struct #ident { #fields }
+    })
+}
+
+/// Resolve the Rust type for a property. For primitives and refs, returns directly.
+/// For inline objects/anyOf/allOf, generates a named struct via the callback.
+fn resolve_property_type(
+    parent_name: &str,
+    prop_name: &str,
+    prop_ref: &ReferenceOr<Box<Schema>>,
+    rename: &HashMap<String, String>,
+    extra_types: &mut TokenStream,
+    generate_inline: &mut impl FnMut(&str, &ReferenceOr<Schema>) -> Result<TokenStream, String>,
+) -> Result<TokenStream, String> {
+    match prop_ref {
+        ReferenceOr::Reference { .. } => Ok(get_rust_type_tokens_boxed(prop_ref, rename)),
+        ReferenceOr::Item(schema) => match &schema.schema_kind {
+            SchemaKind::Type(Type::Array(arr)) => {
+                if let Some(items) = &arr.items {
+                    let inner_type = resolve_property_type(
+                        parent_name,
+                        prop_name,
+                        items,
+                        rename,
+                        extra_types,
+                        generate_inline,
+                    )?;
+                    Ok(quote! { Vec<#inner_type> })
+                } else {
+                    Ok(quote! { Vec<serde_json::Value> })
+                }
+            }
+            SchemaKind::Type(
+                Type::String(_) | Type::Number(_) | Type::Integer(_) | Type::Boolean(_),
+            ) => Ok(get_rust_type_tokens_boxed(prop_ref, rename)),
+            _ => {
+                let sub_type_name = format!("{}{}", parent_name, to_pascal_case(prop_name));
+                let generated =
+                    generate_inline(&sub_type_name, &ReferenceOr::Item(*schema.clone()))?;
+                extra_types.extend(generated);
+                let sub_ident = to_ident(&sub_type_name);
+                Ok(quote! { #sub_ident })
+            }
+        },
     }
 }
 

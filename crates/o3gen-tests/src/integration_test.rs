@@ -65,3 +65,40 @@ fn test_json_serialization() {
     let s2: normal::Status = serde_json::from_str(&json).expect("failed to deserialize");
     assert_eq!(s, s2);
 }
+
+#[test]
+fn test_inline_nested_object() {
+    let user = normal::UserWithAddress {
+        id: 1,
+        name: "Alice".to_string(),
+        address: Some(normal::UserWithAddressAddress {
+            street: "123 Main St".to_string(),
+            city: "Springfield".to_string(),
+            zip: None,
+        }),
+    };
+    assert_eq!(user.address.as_ref().unwrap().street, "123 Main St");
+
+    let json = serde_json::to_string(&user).expect("failed to serialize");
+    assert!(json.contains("\"street\":\"123 Main St\""));
+
+    let roundtrip: normal::UserWithAddress =
+        serde_json::from_str(&json).expect("failed to deserialize");
+    assert_eq!(roundtrip.id, user.id);
+}
+
+#[test]
+fn test_inline_array_of_objects() {
+    let order = normal::Order {
+        order_id: "ORD-001".to_string(),
+        items: Some(vec![normal::OrderItems {
+            product_name: "Widget".to_string(),
+            quantity: Some(3),
+        }]),
+    };
+    assert_eq!(order.order_id, "ORD-001");
+    assert_eq!(
+        order.items.as_ref().unwrap().first().unwrap().product_name,
+        "Widget"
+    );
+}

@@ -8,7 +8,7 @@ use syn::{File, Ident, parse2};
 
 use crate::any_of::generate_any_of_tokens;
 use crate::config::Config;
-use crate::helpers::to_ident;
+use crate::helpers::{get_rust_type_tokens_boxed, to_ident};
 use crate::object::{generate_all_of_tokens, generate_object_tokens};
 use crate::string::generate_string_tokens;
 
@@ -172,13 +172,14 @@ impl Generator {
         match &schema.schema_kind {
             SchemaKind::Type(Type::Object(obj)) => {
                 let derives = self.get_derives(name, false);
-                Ok(generate_object_tokens(
+                generate_object_tokens(
                     name,
                     &ident,
                     obj,
                     &derives,
                     &self.config.rename,
-                ))
+                    &mut |n, s| self.generate_schema_tokens(n, s),
+                )
             }
             SchemaKind::Type(Type::String(s)) => {
                 let derives = self.get_derives(name, false);
@@ -204,14 +205,23 @@ impl Generator {
             }
             SchemaKind::AllOf { all_of } => {
                 let derives = self.get_derives(name, false);
-                Ok(generate_all_of_tokens(
+                generate_all_of_tokens(
                     name,
                     &ident,
                     all_of,
                     &derives,
                     &self.config.rename,
                     &self.schemas,
-                ))
+                    &mut |n, s| self.generate_schema_tokens(n, s),
+                )
+            }
+            SchemaKind::Type(Type::Array(arr)) => {
+                if let Some(items) = &arr.items {
+                    let inner_type = get_rust_type_tokens_boxed(items, &self.config.rename);
+                    Ok(quote! { pub type #ident = Vec<#inner_type>; })
+                } else {
+                    Ok(quote! { pub type #ident = Vec<serde_json::Value>; })
+                }
             }
             _ => Ok(quote! { pub type #ident = serde_json::Value; }),
         }
