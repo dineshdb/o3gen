@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/o3gen", "crates/o3gen-tests"]
+resolver = "2"
