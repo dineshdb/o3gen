@@ -1,6 +1,6 @@
 [package]
 name = "o3gen"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "A library to generate Rust types from OpenAPI 3.0 specifications with renaming support."
@@ -11,6 +11,7 @@ categories = ["development-tools::ffi", "api-bindings"]
 
 [dependencies]
 openapiv3 = "2.2.0"
+prettyplease = "0.2.37"
 proc-macro2 = "1.0"
 quote = "1.0"
 serde = { version = "1.0", features = ["derive"] }

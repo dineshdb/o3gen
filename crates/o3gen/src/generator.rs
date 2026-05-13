@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use syn::Ident;
+use syn::{File, Ident, parse2};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
@@ -94,7 +94,10 @@ impl Generator {
             }
         };
 
-        Ok(final_tokens.to_string())
+        let file = parse2::<File>(final_tokens)
+            .map_err(|e| format!("Failed to parse generated tokens: {e}"))?;
+
+        Ok(prettyplease::unparse(&file))
     }
 
     /// Generates types and writes them to the specified file path.
