@@ -1,3 +1,4 @@
+use heck::ToPascalCase;
 use openapiv3::{ReferenceOr, Schema, SchemaKind, Type};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
@@ -54,7 +55,11 @@ pub fn to_ident(name: &str) -> Ident {
         }
     }
     if is_reserved(&sanitized) {
-        Ident::new_raw(&sanitized, Span::call_site())
+        if matches!(sanitized.as_str(), "self" | "Self" | "super" | "crate") {
+            Ident::new(&format!("{sanitized}_"), Span::call_site())
+        } else {
+            Ident::new_raw(&sanitized, Span::call_site())
+        }
     } else {
         Ident::new(&sanitized, Span::call_site())
     }
@@ -118,18 +123,7 @@ fn is_reserved(name: &str) -> bool {
 
 #[must_use]
 pub fn to_pascal_case(s: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = true;
-    for c in s.chars() {
-        if c == '-' || c == '_' || c == '.' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            result.extend(c.to_uppercase());
-            capitalize_next = false;
-        } else {
-            result.push(c);
-        }
-    }
+    let mut result = s.to_pascal_case();
     if result.is_empty() {
         return "Empty".to_string();
     }

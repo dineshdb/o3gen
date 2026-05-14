@@ -4,4 +4,4 @@ pub mod types {
 }
 
 #[cfg(test)]
-pub mod integration_test;
+pub mod tests;

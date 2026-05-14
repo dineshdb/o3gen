@@ -10,6 +10,7 @@ keywords = ["openapi", "codegen", "types"]
 categories = ["development-tools::ffi", "api-bindings"]
 
 [dependencies]
+heck = "0.5.0"
 openapiv3 = "2.2.0"
 prettyplease = "0.2.37"
 proc-macro2 = "1.0"

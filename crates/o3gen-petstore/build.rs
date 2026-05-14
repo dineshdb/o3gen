@@ -1,12 +1,17 @@
 use o3gen::Generator;
 
 fn main() {
-    // Generate types from petstore OpenAPI with NewPet renamed to NewPetStore
-    Generator::builder("fixtures/petstore-openapi.json")
-        .rename("NewPet", "NewPetStore")
+    // Generate types from petstore OpenAPI
+    Generator::builder("petstore.json")
+        .rename("Category", "PetCategory")
         .write_to_out_dir("types.rs")
         .expect("Failed to generate types.rs");
 
+    Generator::builder("fixtures/composite.json")
+        .write_to_out_dir("composite.rs")
+        .expect("Failed to generate composite.rs");
+
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=fixtures/petstore-openapi.json");
+    println!("cargo:rerun-if-changed=petstore.json");
+    println!("cargo:rerun-if-changed=fixtures/composite.json");
 }

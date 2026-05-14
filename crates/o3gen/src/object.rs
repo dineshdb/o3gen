@@ -1,3 +1,4 @@
+use heck::ToSnakeCase;
 use openapiv3::{ObjectType, ReferenceOr, Schema, SchemaKind, Type};
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -15,7 +16,6 @@ pub fn generate_object_tokens(
     obj: &ObjectType,
     derives: &TokenStream,
     rename: &HashMap<String, String>,
-    _generate_inline: &mut impl FnMut(&str, &ReferenceOr<Schema>) -> Result<TokenStream, String>,
 ) -> Result<TokenStream, String> {
     let mut fields = TokenStream::new();
     let extra_types = TokenStream::new();
@@ -26,12 +26,18 @@ pub fn generate_object_tokens(
         let Some(prop_ref) = obj.properties.get(prop_name) else {
             continue;
         };
-        let prop_ident = to_ident(prop_name);
+        let snake_case_name = prop_name.to_snake_case();
+        let prop_ident = to_ident(&snake_case_name);
         let mut prop_type = resolve_property_type(prop_ref, rename)?;
         if !obj.required.contains(prop_name) {
             prop_type = quote! { Option<#prop_type> };
         }
-        fields.extend(quote! { pub #prop_ident: #prop_type, });
+
+        let original_name = prop_name;
+        fields.extend(quote! {
+            #[serde(rename = #original_name)]
+            pub #prop_ident: #prop_type,
+        });
     }
 
     Ok(quote! {

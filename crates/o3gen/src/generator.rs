@@ -174,9 +174,7 @@ impl Generator {
         match &schema.schema_kind {
             SchemaKind::Type(Type::Object(obj)) => {
                 let derives = self.get_derives(name, false);
-                generate_object_tokens(&ident, obj, &derives, &self.config.rename, &mut |n, s| {
-                    self.generate_schema_tokens(n, s)
-                })
+                generate_object_tokens(&ident, obj, &derives, &self.config.rename)
             }
             SchemaKind::Type(Type::String(s)) => {
                 let derives = self.get_derives(name, false);
