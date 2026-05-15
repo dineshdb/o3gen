@@ -1,16 +1,16 @@
-use crate::types::types;
+use crate::types;
 
 #[test]
 fn test_compare_pets() {
     let pet1 = types::Pet {
         id: "123".to_string(),
         name: "doggie".to_string(),
-        species: "dog".to_string(),
-        status: "available".to_string(),
+        species: types::PetSpecies::Dog,
+        status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),
-        created_at: "2023-01-01T00:00:00Z".to_string(),
-        updated_at: "2023-01-01T00:00:00Z".to_string(),
+        created_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
+        updated_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
         age_months: 12,
         ..Default::default()
     };
@@ -18,12 +18,12 @@ fn test_compare_pets() {
     let pet2 = types::Pet {
         id: "123".to_string(),
         name: "doggie".to_string(),
-        species: "dog".to_string(),
-        status: "available".to_string(),
+        species: types::PetSpecies::Dog,
+        status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),
-        created_at: "2023-01-01T00:00:00Z".to_string(),
-        updated_at: "2023-01-01T00:00:00Z".to_string(),
+        created_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
+        updated_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
         age_months: 12,
         ..Default::default()
     };
@@ -36,12 +36,12 @@ fn test_compare_different_pets() {
     let pet1 = types::Pet {
         id: "1".to_string(),
         name: "doggie".to_string(),
-        species: "dog".to_string(),
-        status: "available".to_string(),
+        species: types::PetSpecies::Dog,
+        status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),
-        created_at: "2023-01-01T00:00:00Z".to_string(),
-        updated_at: "2023-01-01T00:00:00Z".to_string(),
+        created_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
+        updated_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
         age_months: 12,
         ..Default::default()
     };
@@ -49,12 +49,12 @@ fn test_compare_different_pets() {
     let pet2 = types::Pet {
         id: "2".to_string(),
         name: "cat".to_string(),
-        species: "cat".to_string(),
-        status: "available".to_string(),
+        species: types::PetSpecies::Cat,
+        status: types::PetStatus::Available,
         price: "50.00".to_string(),
         currency: "USD".to_string(),
-        created_at: "2023-01-01T00:00:00Z".to_string(),
-        updated_at: "2023-01-01T00:00:00Z".to_string(),
+        created_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
+        updated_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
         age_months: 24,
         ..Default::default()
     };
@@ -67,12 +67,12 @@ fn test_cloning_pet() {
     let original = types::Pet {
         id: "1".to_string(),
         name: "doggie".to_string(),
-        species: "dog".to_string(),
-        status: "available".to_string(),
+        species: types::PetSpecies::Dog,
+        status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),
-        created_at: "2023-01-01T00:00:00Z".to_string(),
-        updated_at: "2023-01-01T00:00:00Z".to_string(),
+        created_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
+        updated_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
         age_months: 12,
         ..Default::default()
     };

@@ -5,10 +5,9 @@ use quote::quote;
 use std::collections::HashMap;
 use syn::Ident;
 
-#[allow(clippy::implicit_hasher)]
-pub fn get_rust_type_tokens_boxed(
+pub fn get_rust_type_tokens_boxed<S: std::hash::BuildHasher>(
     schema_ref: &ReferenceOr<Box<Schema>>,
-    rename: &HashMap<String, String>,
+    rename: &HashMap<String, String, S>,
 ) -> TokenStream {
     match schema_ref {
         ReferenceOr::Reference { reference } => {
@@ -20,7 +19,15 @@ pub fn get_rust_type_tokens_boxed(
         ReferenceOr::Item(schema) => {
             let s: &Schema = schema;
             match &s.schema_kind {
-                SchemaKind::Type(Type::String(_)) => quote! { String },
+                SchemaKind::Type(Type::String(st)) => match &st.format {
+                    openapiv3::VariantOrUnknownOrEmpty::Item(openapiv3::StringFormat::Date) => {
+                        quote! { chrono::NaiveDate }
+                    }
+                    openapiv3::VariantOrUnknownOrEmpty::Item(openapiv3::StringFormat::DateTime) => {
+                        quote! { chrono::DateTime<chrono::Utc> }
+                    }
+                    _ => quote! { String },
+                },
                 SchemaKind::Type(Type::Number(_)) => quote! { f64 },
                 SchemaKind::Type(Type::Integer(_)) => quote! { i64 },
                 SchemaKind::Type(Type::Boolean(_)) => quote! { bool },

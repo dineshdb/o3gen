@@ -1,4 +1,6 @@
-use crate::types::types;
+use crate::types;
+use crate::types::{Pet, PetSpecies, PetStatus};
+use chrono::Utc;
 
 #[test]
 fn test_rename_category_to_pet_category() {
@@ -18,4 +20,45 @@ fn test_rename_category_to_pet_category() {
     let roundtrip: types::PetCategory = serde_json::from_str(&json).expect("failed to deserialize");
     assert_eq!(roundtrip.id, category.id);
     assert_eq!(roundtrip.name, category.name);
+}
+
+#[test]
+fn test_pet_builder_validation() {
+    // Valid pet
+    let pet = Pet::builder()
+        .id("123")
+        .name("Fido")
+        .species(PetSpecies::Dog)
+        .status(PetStatus::Available)
+        .age_months(24)
+        .price("100.00")
+        .currency("USD")
+        .created_at(Utc::now())
+        .updated_at(Utc::now())
+        .photos(vec!["http://example.com/photo.jpg".to_string()])
+        .build()
+        .expect("Builder should succeed for valid pet");
+
+    assert_eq!(pet.name, "Fido");
+
+    // Invalid pet (name too short)
+    let result = Pet::builder()
+        .id("123")
+        .name("") // invalid: too short (min = 1 in petstore.json)
+        .species(PetSpecies::Dog)
+        .status(PetStatus::Available)
+        .age_months(24)
+        .price("100.00")
+        .currency("USD")
+        .created_at(Utc::now())
+        .updated_at(Utc::now())
+        .photos(Vec::<String>::new())
+        .build();
+
+    assert!(
+        result.is_err(),
+        "Builder should fail for invalid pet (empty name)"
+    );
+    let err = result.unwrap_err();
+    assert!(err.contains("name"), "Error should mention 'name'");
 }

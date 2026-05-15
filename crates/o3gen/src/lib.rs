@@ -1,10 +1,13 @@
-pub mod any_of;
+pub mod client;
 pub mod config;
-pub mod flatten;
 pub mod generator;
 pub mod helpers;
-pub mod object;
-pub mod string;
+pub mod ir;
+pub mod transformer;
 
+pub use client::generate_client_traits;
 pub use config::Config;
-pub use generator::{Generator, generate};
+pub use generator::Generator;
+pub use ir::{
+    ApiIr, OperationIr, ParameterIr, ParameterLocation, PrimitiveType, ResponseIr, TypeIr,
+};

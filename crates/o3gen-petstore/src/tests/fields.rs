@@ -1,16 +1,16 @@
-use crate::types::types;
+use crate::types;
 
 #[test]
 fn test_pet_with_required_fields() {
     let pet = types::Pet {
         id: "123".to_string(),
         name: "doggie".to_string(),
-        species: "dog".to_string(),
-        status: "available".to_string(),
+        species: types::PetSpecies::Dog,
+        status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),
-        created_at: "2023-01-01T00:00:00Z".to_string(),
-        updated_at: "2023-01-01T00:00:00Z".to_string(),
+        created_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
+        updated_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
         age_months: 12,
         ..Default::default()
     };
