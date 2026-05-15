@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/o3gen", "crates/o3gen-petstore"]
+members = ["crates/o3gen", "crates/o3gen-petstore", "crates/o3gen-openai"]
 resolver = "2"

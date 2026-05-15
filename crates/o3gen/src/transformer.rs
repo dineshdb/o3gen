@@ -83,25 +83,40 @@ impl<'a> Transformer<'a> {
                 Ok(TypeIr::Reference(self.resolve_final_name(ref_name)))
             }
             ReferenceOr::Item(schema) => {
-                let fp = serde_json::to_string(schema).unwrap_or_default();
-                if let Some(existing_name) = self.fingerprints.get(&fp) {
-                    return Ok(TypeIr::Reference(existing_name.clone()));
-                }
-
+                // For named schemas, always use the provided name
+                // For unnamed schemas, use fingerprint deduplication
                 let candidate = self.resolve_final_name(name);
-                let mut final_name = candidate.clone();
-                let mut counter = 2;
-                while self.taken_names.contains(&final_name) {
-                    final_name = format!("{candidate}{counter}");
-                    counter += 1;
+
+                // Check if this is an unnamed schema (auto-generated name)
+                let is_named = !name.is_empty() && !name.starts_with('{');
+
+                if is_named {
+                    // Named schema: always register with its own name
+                    self.taken_names.insert(candidate.clone());
+                    let def = self.schema_to_definition(&candidate, schema)?;
+                    self.types.insert(candidate.clone(), def);
+                    Ok(TypeIr::Reference(candidate))
+                } else {
+                    // Unnamed schema: use fingerprint deduplication
+                    let fp = serde_json::to_string(schema).unwrap_or_default();
+                    if let Some(existing_name) = self.fingerprints.get(&fp) {
+                        return Ok(TypeIr::Reference(existing_name.clone()));
+                    }
+
+                    let mut final_name = candidate.clone();
+                    let mut counter = 2;
+                    while self.taken_names.contains(&final_name) {
+                        final_name = format!("{candidate}{counter}");
+                        counter += 1;
+                    }
+
+                    self.fingerprints.insert(fp, final_name.clone());
+                    self.taken_names.insert(final_name.clone());
+
+                    let def = self.schema_to_definition(&final_name, schema)?;
+                    self.types.insert(final_name.clone(), def);
+                    Ok(TypeIr::Reference(final_name))
                 }
-
-                self.fingerprints.insert(fp, final_name.clone());
-                self.taken_names.insert(final_name.clone());
-
-                let def = self.schema_to_definition(&final_name, schema)?;
-                self.types.insert(final_name.clone(), def);
-                Ok(TypeIr::Reference(final_name))
             }
         }
     }
@@ -142,6 +157,10 @@ impl<'a> Transformer<'a> {
                 }))
             }
             _ => {
+                eprintln!(
+                    "WARN: schema '{name}' fell through to alias catch-all, schema_kind={:?}",
+                    schema.schema_kind
+                );
                 let target = self.schema_to_type_ir(name, "Target", schema)?;
                 Ok(TypeDefinitionIr::Alias(AliasIr {
                     name: name.to_string(),
@@ -329,6 +348,11 @@ impl<'a> Transformer<'a> {
                 Ok(TypeIr::Reference(self.resolve_final_name(ref_name)))
             }
             ReferenceOr::Item(s) => {
+                // Handle enums specially - they should be registered as types
+                if let Some(enum_def) = Self::try_register_enum(&mut *self, parent, field, s_ref) {
+                    return Ok(TypeIr::Enum(enum_def));
+                }
+
                 if Self::is_complex_schema(s) {
                     let child_name = format!("{parent}{}", to_pascal_case(field));
                     self.resolve_and_register_type(&child_name, s_ref)
@@ -397,6 +421,31 @@ impl<'a> Transformer<'a> {
             SchemaKind::Type(Type::String(st)) if !st.enumeration.is_empty() => true,
             _ => false,
         }
+    }
+
+    fn try_register_enum(
+        &mut self,
+        parent: &str,
+        field: &str,
+        s_ref: &ReferenceOr<Schema>,
+    ) -> Option<String> {
+        let s = match s_ref {
+            ReferenceOr::Item(s) => s,
+            ReferenceOr::Reference { .. } => return None,
+        };
+
+        // Check if this is an enum schema
+        if let SchemaKind::Type(Type::String(st)) = &s.schema_kind
+            && !st.enumeration.is_empty()
+        {
+            let child_name = format!("{parent}{}", to_pascal_case(field));
+            // Register the enum type
+            let def = self.schema_enum_to_definition(&child_name, st);
+            self.types.insert(child_name.clone(), def);
+            self.taken_names.insert(child_name.clone());
+            return Some(child_name);
+        }
+        None
     }
 
     fn process_paths(&mut self) -> Result<Vec<OperationIr>, String> {

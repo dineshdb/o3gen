@@ -132,7 +132,18 @@ impl Generator {
 
             pub type Result<T> = std::result::Result<T, ApiError>;
 
-            #[allow(dead_code)]
+            // prevent clippy from running on generated code
+            #[allow(
+                nonstandard_style,
+                unused,
+                dead_code,
+                non_camel_case_types,
+                unused_imports,
+                unreachable_pub,
+                unused_qualifications,
+                unused_variables,
+                unused_must_use,
+            )]
             pub mod types {
                 use serde::{Serialize, Deserialize};
                 use validator::Validate;
@@ -393,6 +404,10 @@ impl Generator {
                 let ident = to_ident(r);
                 quote! { #ident }
             }
+            TypeIr::Enum(e) => {
+                let ident = to_ident(e);
+                quote! { #ident }
+            }
             TypeIr::Primitive(p) => match p {
                 PrimitiveType::String => quote! { String },
                 PrimitiveType::Integer => quote! { i64 },
@@ -422,6 +437,7 @@ impl Generator {
     fn emit_type_ref(t: &TypeIr) -> String {
         match t {
             TypeIr::Reference(r) => r.clone(),
+            TypeIr::Enum(e) => e.clone(),
             TypeIr::Primitive(p) => match p {
                 PrimitiveType::String => "String".to_string(),
                 PrimitiveType::Integer => "i64".to_string(),

@@ -99,7 +99,8 @@ pub enum TypeIr {
     Primitive(PrimitiveType),
     Array(Box<TypeIr>),
     Map(Box<TypeIr>),
-    Value, // serde_json::Value
+    Value,        // serde_json::Value
+    Enum(String), // Reference to an enum type definition
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

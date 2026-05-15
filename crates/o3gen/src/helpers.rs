@@ -91,8 +91,11 @@ pub fn to_pascal_case(s: &str) -> String {
     if result.is_empty() {
         return "Empty".to_string();
     }
-    if result.starts_with(|c: char| !c.is_alphabetic()) {
-        result.insert(0, 'V');
+    // Ensure first character is uppercase for valid Rust type names
+    if let Some(first) = result.chars().next()
+        && first.is_lowercase()
+    {
+        result = format!("{}{}", first.to_uppercase(), &result[1..]);
     }
     result
 }
