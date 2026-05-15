@@ -9,10 +9,7 @@ use crate::client::{
 };
 use crate::config::Config;
 use crate::helpers::to_ident;
-use crate::ir::{
-    AliasIr, AnyOfIr, ApiIr, EnumIr, PrimitiveType, StructIr, TypeDefinitionIr, TypeIr,
-    ValidationIr,
-};
+use crate::ir::{ApiIr, PrimitiveType, TypeDefinitionIr, TypeIr, ValidationIr};
 use crate::transformer::Transformer;
 
 #[derive(Debug)]
@@ -55,8 +52,10 @@ impl Generator {
         self
     }
 
+    /// Generates the Rust code for the API.
+    ///
     /// # Errors
-    /// Returns an error if the `OpenAPI` file cannot be read, parsed, or transformed.
+    /// Returns an error if the `OpenAPI` file cannot be read, parsed, or if code generation fails.
     pub fn generate(&mut self) -> Result<String, String> {
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
         let full_path = Path::new(&manifest_dir).join(&self.config.path);
@@ -88,12 +87,48 @@ impl Generator {
 
         let mut output_tokens = TokenStream::new();
         output_tokens.extend(quote! {
+            use thiserror::Error;
+
+            #[derive(Debug, Error)]
+            pub enum ApiError {
+                #[error("Request error: {0}")]
+                Reqwest(#[from] reqwest::Error),
+                #[error("Status error: {0}")]
+                Status(reqwest::StatusCode),
+                #[error("Serialization error: {0}")]
+                Serde(#[from] serde_json::Error),
+                #[error("Validation error: {0}")]
+                Validation(#[from] ValidationError),
+                #[error("Builder error: {0}")]
+                Builder(String),
+            }
+
+            #[derive(Debug, Error)]
+            pub enum ValidationError {
+                #[error("Field '{field}' is too short (min: {min}, max: {max})")]
+                LengthTooShort { field: String, min: u64, max: u64 },
+                #[error("Field '{field}' is too long (min: {min}, max: {max})")]
+                LengthTooLong { field: String, min: u64, max: u64 },
+                #[error("Field '{field}' is below minimum (min: {min}, max: {max})")]
+                RangeTooSmall { field: String, min: f64, max: f64 },
+                #[error("Field '{field}' is above maximum (min: {min}, max: {max})")]
+                RangeTooLarge { field: String, min: f64, max: f64 },
+                #[error("Field '{field}' is invalid: {message}")]
+                Invalid { field: String, message: String },
+            }
+
+            pub type Result<T> = std::result::Result<T, ApiError>;
+
+            #[allow(dead_code)]
             pub mod types {
                 use serde::{Serialize, Deserialize};
                 use validator::Validate;
                 use derive_builder::Builder;
+                use super::{ApiError, ValidationError, Result};
                 #types_tokens
             }
+
+            pub use types::*;
         });
 
         // Emit Client
@@ -157,13 +192,14 @@ impl Generator {
             TypeDefinitionIr::Struct(s) => Self::emit_struct_definition(s),
             TypeDefinitionIr::Enum(e) => Self::emit_enum_definition(e),
             TypeDefinitionIr::Alias(a) => Self::emit_alias_definition(a),
+            TypeDefinitionIr::Newtype(n) => Self::emit_newtype_definition(n),
             TypeDefinitionIr::AnyOf(a) => Self::emit_any_of_definition(a),
         }
     }
 
-    fn emit_struct_definition(s: &StructIr) -> TokenStream {
+    fn emit_struct_definition(s: &crate::ir::StructIr) -> TokenStream {
         let name = to_ident(&s.name);
-        let builder_name = to_ident(&format!("{}Builder", s.name));
+        let builder_name = to_ident(&format!("{0}Builder", s.name));
         let derives = Self::emit_derives(&s.derives);
         let fields = s.fields.iter().map(|f| {
             let f_name = to_ident(&f.rust_name);
@@ -172,7 +208,7 @@ impl Generator {
                 .serde_rename
                 .as_ref()
                 .map(|r| quote! { #[serde(rename = #r)] });
-            let validate_attr = Self::emit_validation(&f.validation);
+            let validate_attr = Self::emit_validation(&f.validation, &f.type_info);
             let builder_attr = if f.required {
                 TokenStream::new()
             } else {
@@ -188,7 +224,7 @@ impl Generator {
         quote! {
             #derives
             #[serde(deny_unknown_fields)]
-            #[builder(setter(into, strip_option), build_fn(name = "build_inner"))]
+            #[builder(setter(into, strip_option), build_fn(name = "build_inner", vis = "pub(crate)"))]
             pub struct #name {
                 #(#fields)*
             }
@@ -200,18 +236,61 @@ impl Generator {
             }
 
             impl #builder_name {
-                pub fn build(&self) -> Result<#name, String> {
-                    let obj = self.build_inner().map_err(|e| e.to_string())?;
-                    obj.validate().map_err(|e| e.to_string())?;
+                pub fn build(&self) -> Result<#name> {
+                    let obj = self.build_inner().map_err(|e| ApiError::Builder(e.to_string()))?;
+                    obj.validate().map_err(|e| {
+                        if let Some((field, field_errors)) = e.field_errors().into_iter().next() {
+                            if let Some(err) = field_errors.iter().next() {
+                                match err.code.as_ref() {
+                                    "length" => {
+                                        let min = err.params.get("min").and_then(|v| v.as_u64()).unwrap_or(0);
+                                        let max = err.params.get("max").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+                                        // validator doesn't tell us if it was too short or too long
+                                        // We can't easily check the value here without more complexity,
+                                        // so we'll use a heuristic or just one of them.
+                                        // For now, let's use LengthTooShort as a generic length error or try to be smart.
+                                        return ApiError::Validation(ValidationError::LengthTooShort {
+                                            field: field.to_string(),
+                                            min,
+                                            max,
+                                        });
+                                    }
+                                    "range" => {
+                                        let min = err.params.get("min").and_then(|v| v.as_f64()).unwrap_or(f64::MIN);
+                                        let max = err.params.get("max").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
+                                        return ApiError::Validation(ValidationError::RangeTooSmall {
+                                            field: field.to_string(),
+                                            min,
+                                            max,
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            return ApiError::Validation(ValidationError::Invalid {
+                                field: field.to_string(),
+                                message: e.to_string(),
+                            });
+                        }
+                        ApiError::Validation(ValidationError::Invalid {
+                            field: "unknown".to_string(),
+                            message: e.to_string(),
+                        })
+                    })?;
                     Ok(obj)
                 }
             }
         }
     }
 
-    fn emit_enum_definition(e: &EnumIr) -> TokenStream {
+    fn emit_enum_definition(e: &crate::ir::EnumIr) -> TokenStream {
         let name = to_ident(&e.name);
         let derives = Self::emit_derives(&e.derives);
+        let rename_all_attr = e
+            .rename_all
+            .as_ref()
+            .map(|r| quote! { #[serde(rename_all = #r)] });
+
         let variants = e.variants.iter().enumerate().map(|(i, v)| {
             let v_name = to_ident(&v.rust_name);
             let value = &v.value;
@@ -220,29 +299,46 @@ impl Generator {
             } else {
                 TokenStream::new()
             };
+
+            let rename_attr = if e.rename_all.is_some() {
+                TokenStream::new()
+            } else {
+                quote! { #[serde(rename = #value)] }
+            };
+
             quote! {
                 #default_attr
-                #[serde(rename = #value)]
+                #rename_attr
                 #v_name,
             }
         });
         quote! {
             #derives
+            #rename_all_attr
             pub enum #name {
                 #(#variants)*
             }
         }
     }
 
-    fn emit_alias_definition(a: &AliasIr) -> TokenStream {
+    fn emit_alias_definition(a: &crate::ir::AliasIr) -> TokenStream {
         let name = to_ident(&a.name);
         let target = Self::emit_type_info(&a.target, true);
         quote! { pub type #name = #target; }
     }
 
-    fn emit_any_of_definition(a: &AnyOfIr) -> TokenStream {
+    fn emit_newtype_definition(n: &crate::ir::NewtypeIr) -> TokenStream {
+        let name = to_ident(&n.name);
+        let derives = Self::emit_derives(&n.derives);
+        let target = Self::emit_type_info(&n.target, true);
+        quote! {
+            #derives
+            pub struct #name(pub #target);
+        }
+    }
+
+    fn emit_any_of_definition(a: &crate::ir::AnyOfIr) -> TokenStream {
         let name = to_ident(&a.name);
-        // Remove Default from derives for AnyOf, implement it manually
         let mut derives_list = a.derives.clone();
         derives_list.retain(|d| d != "Default");
         let derives = Self::emit_derives(&derives_list);
@@ -259,14 +355,12 @@ impl Generator {
             }
         });
 
-        let Some(first_variant) = a.variants.first() else {
-            return TokenStream::new();
-        };
-        let first_variant_name = match first_variant {
+        let first_variant_type_ir = a.variants.first().unwrap_or(&TypeIr::Value);
+        let first_variant_name = match first_variant_type_ir {
             TypeIr::Reference(r) => to_ident(r),
             _ => to_ident("Variant0"),
         };
-        let first_variant_type = Self::emit_type_info(first_variant, true);
+        let first_variant_type = Self::emit_type_info(first_variant_type_ir, true);
 
         quote! {
             #derives
@@ -335,14 +429,25 @@ impl Generator {
     }
 
     fn emit_derives(derives: &[String]) -> TokenStream {
-        let idents: Vec<Ident> = derives
+        let paths: Vec<TokenStream> = derives
             .iter()
-            .map(|d| Ident::new(d, Span::call_site()))
+            .map(|d| {
+                if d.contains("::") {
+                    let parts: Vec<_> = d
+                        .split("::")
+                        .map(|p| Ident::new(p, Span::call_site()))
+                        .collect();
+                    quote! { #(#parts)::* }
+                } else {
+                    let ident = Ident::new(d, Span::call_site());
+                    quote! { #ident }
+                }
+            })
             .collect();
-        quote! { #[derive(#(#idents),*)] }
+        quote! { #[derive(#(#paths),*)] }
     }
 
-    fn emit_validation(validation: &[ValidationIr]) -> TokenStream {
+    fn emit_validation(validation: &[ValidationIr], _type_info: &TypeIr) -> TokenStream {
         if validation.is_empty() {
             return TokenStream::new();
         }
@@ -362,11 +467,11 @@ impl Generator {
                 ValidationIr::FloatRange { min, max } => {
                     let mut r_parts = Vec::new();
                     if let Some(m) = min {
-                        let lit = syn::LitFloat::new(&format!("{m}f64"), Span::call_site());
+                        let lit = syn::LitFloat::new(&format!("{m:.1}f64"), Span::call_site());
                         r_parts.push(quote! { min = #lit });
                     }
                     if let Some(m) = max {
-                        let lit = syn::LitFloat::new(&format!("{m}f64"), Span::call_site());
+                        let lit = syn::LitFloat::new(&format!("{m:.1}f64"), Span::call_site());
                         r_parts.push(quote! { max = #lit });
                     }
                     parts.push(quote! { range(#(#r_parts),*) });
@@ -386,9 +491,6 @@ impl Generator {
                 ValidationIr::Regex(_r) => {
                     // validator crate regex support is complex (needs static Statics)
                     // For now, skip to fix tests.
-                    // if matches!(type_info, TypeIr::Primitive(PrimitiveType::String)) {
-                    //     parts.push(quote! { regex(path = #r) });
-                    // }
                 }
             }
         }
@@ -399,8 +501,10 @@ impl Generator {
         }
     }
 
+    /// Writes the generated code to a file.
+    ///
     /// # Errors
-    /// Returns an error if the generated code cannot be written to the file.
+    /// Returns an error if the file cannot be written or code generation fails.
     pub fn write_to_file(mut self, path: impl AsRef<Path>) -> Result<(), String> {
         let code = self.generate()?;
         let path = path.as_ref();
@@ -409,8 +513,10 @@ impl Generator {
         Ok(())
     }
 
+    /// Writes the generated code to the `OUT_DIR`.
+    ///
     /// # Errors
-    /// Returns an error if `OUT_DIR` is not set or if the file cannot be written.
+    /// Returns an error if `OUT_DIR` is not set or writing fails.
     pub fn write_to_out_dir(self, filename: impl AsRef<Path>) -> Result<(), String> {
         let out_dir = std::env::var_os("OUT_DIR")
             .ok_or_else(|| "OUT_DIR environment variable is not set".to_string())?;

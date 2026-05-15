@@ -51,6 +51,6 @@ fn test_all_of_struct_flattening() {
 #[test]
 fn test_all_of_deserialization_missing_required_field() {
     let invalid_json = r#"{"id": "comp-1"}"#; // missing name
-    let result: Result<types::CompositePet, _> = serde_json::from_str(invalid_json);
+    let result: std::result::Result<types::CompositePet, _> = serde_json::from_str(invalid_json);
     assert!(result.is_err());
 }

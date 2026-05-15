@@ -60,5 +60,8 @@ fn test_pet_builder_validation() {
         "Builder should fail for invalid pet (empty name)"
     );
     let err = result.unwrap_err();
-    assert!(err.contains("name"), "Error should mention 'name'");
+    assert!(
+        err.to_string().contains("name"),
+        "Error should mention 'name'"
+    );
 }

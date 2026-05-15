@@ -1,4 +1,4 @@
-use heck::{ToPascalCase, ToSnakeCase};
+use heck::{ToKebabCase, ToLowerCamelCase, ToPascalCase, ToSnakeCase};
 use http::{Method, StatusCode};
 use indexmap::IndexMap;
 use openapiv3::{
@@ -10,7 +10,7 @@ use std::str::FromStr;
 use crate::config::Config;
 use crate::helpers::to_pascal_case;
 use crate::ir::{
-    AliasIr, AnyOfIr, ApiIr, EnumIr, EnumVariantIr, FieldIr, OperationIr, ParameterIr,
+    AliasIr, AnyOfIr, ApiIr, EnumIr, EnumVariantIr, FieldIr, NewtypeIr, OperationIr, ParameterIr,
     ParameterLocation, PrimitiveType, ResponseIr, StructIr, TypeDefinitionIr, TypeIr, ValidationIr,
 };
 
@@ -98,7 +98,18 @@ impl<'a> Transformer<'a> {
         match &schema.schema_kind {
             SchemaKind::Type(Type::Object(obj)) => self.schema_object_to_definition(name, obj),
             SchemaKind::Type(Type::String(s)) if !s.enumeration.is_empty() => {
-                Ok(Self::schema_enum_to_definition(name, s))
+                Ok(self.schema_enum_to_definition(name, s))
+            }
+
+            SchemaKind::Type(Type::String(_) | Type::Integer(_))
+                if name.ends_with("Id") || name == "Id" =>
+            {
+                let target = self.schema_to_type_ir(name, "Target", schema)?;
+                Ok(TypeDefinitionIr::Newtype(NewtypeIr {
+                    name: name.to_string(),
+                    target,
+                    derives: self.get_newtype_derives(name),
+                }))
             }
             SchemaKind::AnyOf { any_of } => self.schema_any_of_to_definition(name, any_of),
             SchemaKind::AllOf { all_of } => self.schema_all_of_to_definition(name, all_of),
@@ -154,27 +165,80 @@ impl<'a> Transformer<'a> {
         }))
     }
 
-    fn schema_enum_to_definition(name: &str, s: &openapiv3::StringType) -> TypeDefinitionIr {
+    fn schema_enum_to_definition(&self, name: &str, s: &openapiv3::StringType) -> TypeDefinitionIr {
         let mut variants = Vec::new();
+        let mut raw_values = Vec::new();
         for v in s.enumeration.iter().flatten() {
             variants.push(EnumVariantIr {
                 name: v.clone(),
                 rust_name: v.to_pascal_case(),
                 value: v.clone(),
             });
+            raw_values.push(v.clone());
         }
+
+        let rename_all = Self::detect_casing(&raw_values);
+
         TypeDefinitionIr::Enum(EnumIr {
             name: name.to_string(),
             variants,
-            derives: vec![
-                "Debug".to_string(),
-                "Clone".to_string(),
-                "Serialize".to_string(),
-                "Deserialize".to_string(),
-                "PartialEq".to_string(),
-                "Default".to_string(),
-            ],
+            derives: self.get_enum_derives(name),
+            rename_all,
         })
+    }
+
+    fn detect_casing(values: &[String]) -> Option<String> {
+        if values.is_empty() {
+            return None;
+        }
+
+        if values
+            .iter()
+            .all(|v| v.chars().all(|c| c.is_uppercase() || c == '_'))
+        {
+            return Some("SCREAMING_SNAKE_CASE".to_string());
+        }
+        if values
+            .iter()
+            .all(|v| v.chars().all(|c| c.is_lowercase() || c == '_'))
+        {
+            return Some("snake_case".to_string());
+        }
+        if values.iter().all(|v| v == &v.to_snake_case()) {
+            return Some("snake_case".to_string());
+        }
+        if values.iter().all(|v| v == &v.to_pascal_case()) {
+            return Some("PascalCase".to_string());
+        }
+        if values.iter().all(|v| v == &v.to_lower_camel_case()) {
+            return Some("camelCase".to_string());
+        }
+        if values.iter().all(|v| v == &v.to_kebab_case()) {
+            return Some("kebab-case".to_string());
+        }
+
+        None
+    }
+
+    fn get_newtype_derives(&self, name: &str) -> Vec<String> {
+        let mut derives = vec![
+            "Debug".to_string(),
+            "Clone".to_string(),
+            "Serialize".to_string(),
+            "Deserialize".to_string(),
+            "PartialEq".to_string(),
+            "Default".to_string(),
+            "derive_more::Display".to_string(),
+            "derive_more::From".to_string(),
+        ];
+        if let Some(extra) = self.config.derive_extra.get(name) {
+            for tr in extra {
+                if !derives.contains(tr) {
+                    derives.push(tr.clone());
+                }
+            }
+        }
+        derives
     }
 
     fn schema_any_of_to_definition(
@@ -581,6 +645,28 @@ impl<'a> Transformer<'a> {
             "Default".to_string(),
             "Validate".to_string(),
             "Builder".to_string(),
+        ];
+        if let Some(extra) = self.config.derive_extra.get(name) {
+            for tr in extra {
+                if !derives.contains(tr) {
+                    derives.push(tr.clone());
+                }
+            }
+        }
+        derives
+    }
+
+    fn get_enum_derives(&self, name: &str) -> Vec<String> {
+        let mut derives = vec![
+            "Debug".to_string(),
+            "Clone".to_string(),
+            "Serialize".to_string(),
+            "Deserialize".to_string(),
+            "PartialEq".to_string(),
+            "Default".to_string(),
+            "strum::Display".to_string(),
+            "strum::EnumString".to_string(),
+            "strum::EnumIter".to_string(),
         ];
         if let Some(extra) = self.config.derive_extra.get(name) {
             for tr in extra {

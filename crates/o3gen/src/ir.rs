@@ -13,12 +13,28 @@ pub enum TypeDefinitionIr {
     Enum(EnumIr),
     Alias(AliasIr),
     AnyOf(AnyOfIr),
+    Newtype(NewtypeIr),
 }
 
 #[derive(Debug, Clone)]
 pub struct StructIr {
     pub name: String,
     pub fields: Vec<FieldIr>,
+    pub derives: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumIr {
+    pub name: String,
+    pub variants: Vec<EnumVariantIr>,
+    pub derives: Vec<String>,
+    pub rename_all: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewtypeIr {
+    pub name: String,
+    pub target: TypeIr,
     pub derives: Vec<String>,
 }
 
@@ -30,13 +46,6 @@ pub struct FieldIr {
     pub required: bool,
     pub validation: Vec<ValidationIr>,
     pub serde_rename: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct EnumIr {
-    pub name: String,
-    pub variants: Vec<EnumVariantIr>,
-    pub derives: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
