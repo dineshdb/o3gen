@@ -1,5 +1,5 @@
 use crate::PetApi;
-use crate::PetClient;
+use crate::PetApiClient;
 use crate::types::{
     ListPetsQuery, ListPetsSpecies, Pet, PetCollection, PetCollectionPagination, PetSpecies,
     PetStatus,
@@ -10,7 +10,7 @@ use mockito::Server;
 async fn test_list_pets() {
     let mut server = Server::new_async().await;
     let url = server.url();
-    let client = PetClient::new(url);
+    let client = PetApiClient::new(url);
 
     let mock_pet = Pet {
         id: "1".to_string(),
@@ -59,7 +59,7 @@ async fn test_list_pets() {
 async fn test_get_pet() {
     let mut server = Server::new_async().await;
     let url = server.url();
-    let client = PetClient::new(url);
+    let client = PetApiClient::new(url);
 
     let mock_pet = Pet {
         id: "123".to_string(),
@@ -91,7 +91,7 @@ async fn test_get_pet() {
 async fn test_api_error() {
     let mut server = Server::new_async().await;
     let url = server.url();
-    let client = PetClient::new(url);
+    let client = PetApiClient::new(url);
 
     let _m = server
         .mock("GET", mockito::Matcher::Regex("^/pets".to_string()))

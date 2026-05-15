@@ -22,6 +22,47 @@ pub struct OperationDetails {
     pub path: String,
 }
 
+fn compute_method_name(operation_id: &str, trait_ident: &Ident) -> String {
+    let snake = operation_id.to_snake_case();
+    if ["get", "post", "put", "delete", "patch"].contains(&snake.as_str()) {
+        format!("{snake}_by_{}", trait_ident.to_string().to_snake_case())
+    } else {
+        snake
+    }
+}
+
+fn type_string_to_tokens(type_str: &str) -> TokenStream {
+    if matches!(type_str, "String" | "i64" | "f64" | "bool") {
+        let ident = to_ident(type_str);
+        quote! { #ident }
+    } else if type_str == "serde_json::Value" {
+        quote! { serde_json::Value }
+    } else if type_str.contains("::") {
+        let parts: Vec<_> = type_str.split("::").collect();
+        let first = parts.first().map_or_else(
+            || Ident::new("unknown", proc_macro2::Span::call_site()),
+            |p| Ident::new(p, proc_macro2::Span::call_site()),
+        );
+        let second = parts.get(1).map_or_else(
+            || Ident::new("unknown", proc_macro2::Span::call_site()),
+            |p| Ident::new(p, proc_macro2::Span::call_site()),
+        );
+        quote! { #first :: #second }
+    } else {
+        let ident = to_ident(type_str);
+        quote! { #ident }
+    }
+}
+
+fn response_type_tokens(response_type: Option<&String>) -> TokenStream {
+    if let Some(rt) = response_type {
+        let ty_ident = to_ident(rt);
+        quote! { #ty_ident }
+    } else {
+        quote! { serde_json::Value }
+    }
+}
+
 /// Generate client trait methods for API operations
 #[must_use]
 pub fn generate_client_traits(type_ident: &Ident, operations: &[OperationDetails]) -> TokenStream {
@@ -29,51 +70,16 @@ pub fn generate_client_traits(type_ident: &Ident, operations: &[OperationDetails
     let mut methods = TokenStream::new();
 
     for op in operations {
-        let snake_case_op_id = op.operation_id.to_snake_case();
-        let final_method_name =
-            if ["get", "post", "put", "delete", "patch"].contains(&snake_case_op_id.as_str()) {
-                format!(
-                    "{snake_case_op_id}_by_{}",
-                    type_ident.to_string().to_snake_case()
-                )
-            } else {
-                snake_case_op_id
-            };
+        let final_method_name = compute_method_name(&op.operation_id, type_ident);
         let method_ident = to_ident(&final_method_name);
-
-        let response_type = if let Some(rt) = &op.response_type {
-            let ty_ident = to_ident(rt);
-            quote! { #ty_ident }
-        } else {
-            quote! { serde_json::Value }
-        };
+        let response_type = response_type_tokens(op.response_type.as_ref());
 
         let mut params = TokenStream::new();
         params.extend(quote! { &self });
 
         for param in &op.parameters {
             let p_ident = to_ident(&param.name.to_snake_case());
-            let type_tokens =
-                if matches!(param.rust_type.as_str(), "String" | "i64" | "f64" | "bool") {
-                    let p_type = to_ident(&param.rust_type);
-                    quote! { #p_type }
-                } else if param.rust_type == "serde_json::Value" {
-                    quote! { serde_json::Value }
-                } else if param.rust_type.contains("::") {
-                    let parts: Vec<_> = param.rust_type.split("::").collect();
-                    let first = parts.first().map_or_else(
-                        || Ident::new("unknown", proc_macro2::Span::call_site()),
-                        |p| Ident::new(p, proc_macro2::Span::call_site()),
-                    );
-                    let second = parts.get(1).map_or_else(
-                        || Ident::new("unknown", proc_macro2::Span::call_site()),
-                        |p| Ident::new(p, proc_macro2::Span::call_site()),
-                    );
-                    quote! { #first :: #second }
-                } else {
-                    let p_type = to_ident(&param.rust_type);
-                    quote! { #p_type }
-                };
+            let type_tokens = type_string_to_tokens(&param.rust_type);
             params.extend(quote! { , #p_ident: #type_tokens });
         }
 
@@ -105,24 +111,9 @@ pub fn generate_client_impl(
     let mut impl_methods = TokenStream::new();
 
     for op in operations {
-        let snake_case_op_id = op.operation_id.to_snake_case();
-        let final_method_name =
-            if ["get", "post", "put", "delete", "patch"].contains(&snake_case_op_id.as_str()) {
-                format!(
-                    "{snake_case_op_id}_by_{}",
-                    trait_ident.to_string().to_snake_case()
-                )
-            } else {
-                snake_case_op_id
-            };
+        let final_method_name = compute_method_name(&op.operation_id, trait_ident);
         let method_ident = to_ident(&final_method_name);
-
-        let response_type = if let Some(rt) = &op.response_type {
-            let ty_ident = to_ident(rt);
-            quote! { #ty_ident }
-        } else {
-            quote! { serde_json::Value }
-        };
+        let response_type = response_type_tokens(op.response_type.as_ref());
 
         let mut params = TokenStream::new();
         params.extend(quote! { &self });
@@ -134,27 +125,7 @@ pub fn generate_client_impl(
         for param in &op.parameters {
             let p_snake_name = param.name.to_snake_case();
             let p_ident = to_ident(&p_snake_name);
-            let type_tokens =
-                if matches!(param.rust_type.as_str(), "String" | "i64" | "f64" | "bool") {
-                    let p_type = to_ident(&param.rust_type);
-                    quote! { #p_type }
-                } else if param.rust_type == "serde_json::Value" {
-                    quote! { serde_json::Value }
-                } else if param.rust_type.contains("::") {
-                    let parts: Vec<_> = param.rust_type.split("::").collect();
-                    let first = parts.first().map_or_else(
-                        || Ident::new("unknown", proc_macro2::Span::call_site()),
-                        |p| Ident::new(p, proc_macro2::Span::call_site()),
-                    );
-                    let second = parts.get(1).map_or_else(
-                        || Ident::new("unknown", proc_macro2::Span::call_site()),
-                        |p| Ident::new(p, proc_macro2::Span::call_site()),
-                    );
-                    quote! { #first :: #second }
-                } else {
-                    let p_type = to_ident(&param.rust_type);
-                    quote! { #p_type }
-                };
+            let type_tokens = type_string_to_tokens(&param.rust_type);
             params.extend(quote! { , #p_ident: #type_tokens });
 
             if op.path.contains(&format!("{{{}}}", param.name)) {

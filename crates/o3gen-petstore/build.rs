@@ -4,6 +4,7 @@ fn main() {
     // Generate types from petstore OpenAPI
     Generator::builder("petstore.json")
         .rename("Category", "PetCategory")
+        .api_name("PetApi")
         .write_to_out_dir("types.rs")
         .expect("Failed to generate types.rs");
 

@@ -52,6 +52,12 @@ impl Generator {
         self
     }
 
+    #[must_use]
+    pub fn api_name(mut self, name: impl Into<String>) -> Self {
+        self.config.api_name = Some(name.into());
+        self
+    }
+
     /// Generates the Rust code for the API.
     ///
     /// # Errors
@@ -73,11 +79,18 @@ impl Generator {
         // Heavy lifting: OpenAPI -> ApiIr
         let ir = Transformer::transform(&openapi, &self.config)?;
 
+        // Resolve API name from config or spec title
+        let api_name = self
+            .config
+            .api_name
+            .clone()
+            .unwrap_or_else(|| crate::helpers::to_pascal_case(&openapi.info.title));
+
         // Simple Emit: ApiIr -> Tokens
-        Self::emit(ir)
+        Self::emit(ir, &api_name)
     }
 
-    fn emit(ir: ApiIr) -> Result<String, String> {
+    fn emit(ir: ApiIr, api_name: &str) -> Result<String, String> {
         let mut types_tokens = TokenStream::new();
 
         // Emit types
@@ -163,21 +176,19 @@ impl Generator {
         operations_details.sort_by(|a, b| a.operation_id.cmp(&b.operation_id));
 
         if !operations_details.is_empty() {
-            let pet_api_trait_tokens = generate_client_traits(
-                &Ident::new("PetApi", Span::call_site()),
-                &operations_details,
-            );
+            let trait_ident = to_ident(api_name);
+            let client_name = format!("{api_name}Client");
+            let client_ident = to_ident(&client_name);
+
+            let trait_tokens = generate_client_traits(&trait_ident, &operations_details);
             output_tokens.extend(quote! {
-                #pet_api_trait_tokens
+                #trait_tokens
             });
 
-            let pet_client_impl_tokens = generate_client_impl(
-                &Ident::new("PetApi", Span::call_site()),
-                &Ident::new("PetClient", Span::call_site()),
-                &operations_details,
-            );
+            let impl_tokens =
+                generate_client_impl(&trait_ident, &client_ident, &operations_details);
             output_tokens.extend(quote! {
-                #pet_client_impl_tokens
+                #impl_tokens
             });
         }
 
@@ -487,10 +498,6 @@ impl Generator {
                         r_parts.push(quote! { max = #lit });
                     }
                     parts.push(quote! { range(#(#r_parts),*) });
-                }
-                ValidationIr::Regex(_r) => {
-                    // validator crate regex support is complex (needs static Statics)
-                    // For now, skip to fix tests.
                 }
             }
         }

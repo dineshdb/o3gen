@@ -1,49 +1,6 @@
 use heck::ToPascalCase;
-use openapiv3::{ReferenceOr, Schema, SchemaKind, Type};
-use proc_macro2::{Span, TokenStream};
-use quote::quote;
-use std::collections::HashMap;
+use proc_macro2::Span;
 use syn::Ident;
-
-pub fn get_rust_type_tokens_boxed<S: std::hash::BuildHasher>(
-    schema_ref: &ReferenceOr<Box<Schema>>,
-    rename: &HashMap<String, String, S>,
-) -> TokenStream {
-    match schema_ref {
-        ReferenceOr::Reference { reference } => {
-            let name = reference.split('/').next_back().unwrap_or("Unknown");
-            let final_name = rename.get(name).map_or(name, String::as_str);
-            let ident = to_ident(final_name);
-            quote! { #ident }
-        }
-        ReferenceOr::Item(schema) => {
-            let s: &Schema = schema;
-            match &s.schema_kind {
-                SchemaKind::Type(Type::String(st)) => match &st.format {
-                    openapiv3::VariantOrUnknownOrEmpty::Item(openapiv3::StringFormat::Date) => {
-                        quote! { chrono::NaiveDate }
-                    }
-                    openapiv3::VariantOrUnknownOrEmpty::Item(openapiv3::StringFormat::DateTime) => {
-                        quote! { chrono::DateTime<chrono::Utc> }
-                    }
-                    _ => quote! { String },
-                },
-                SchemaKind::Type(Type::Number(_)) => quote! { f64 },
-                SchemaKind::Type(Type::Integer(_)) => quote! { i64 },
-                SchemaKind::Type(Type::Boolean(_)) => quote! { bool },
-                SchemaKind::Type(Type::Array(arr)) => {
-                    if let Some(items) = &arr.items {
-                        let inner_type = get_rust_type_tokens_boxed(items, rename);
-                        quote! { Vec<#inner_type> }
-                    } else {
-                        quote! { Vec<serde_json::Value> }
-                    }
-                }
-                _ => quote! { serde_json::Value },
-            }
-        }
-    }
-}
 
 #[must_use]
 pub fn to_ident(name: &str) -> Ident {

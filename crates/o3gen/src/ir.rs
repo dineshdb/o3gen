@@ -1,3 +1,4 @@
+use heck::ToSnakeCase;
 use http::{Method, StatusCode};
 use indexmap::IndexMap;
 
@@ -48,6 +49,30 @@ pub struct FieldIr {
     pub serde_rename: Option<String>,
 }
 
+impl FieldIr {
+    #[must_use]
+    pub fn new(
+        name: &str,
+        type_info: TypeIr,
+        required: bool,
+        validation: Vec<ValidationIr>,
+    ) -> Self {
+        let rust_name = name.to_snake_case();
+        Self {
+            name: name.to_string(),
+            serde_rename: if name == rust_name {
+                None
+            } else {
+                Some(name.to_string())
+            },
+            rust_name,
+            type_info,
+            required,
+            validation,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EnumVariantIr {
     pub name: String,
@@ -87,12 +112,11 @@ pub enum PrimitiveType {
     DateTime,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ValidationIr {
     Length { min: Option<u64>, max: Option<u64> },
     FloatRange { min: Option<f64>, max: Option<f64> },
     IntRange { min: Option<i64>, max: Option<i64> },
-    Regex(String),
 }
 
 #[derive(Debug, Clone)]

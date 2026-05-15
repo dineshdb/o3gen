@@ -8,4 +8,6 @@ pub struct Config {
     pub rename: HashMap<String, String>,
     #[serde(default)]
     pub derive_extra: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub api_name: Option<String>,
 }

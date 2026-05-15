@@ -24,6 +24,25 @@ pub struct Transformer<'a> {
 }
 
 impl<'a> Transformer<'a> {
+    fn resolve_ref_name(reference: &str) -> Result<&str, String> {
+        reference
+            .split('/')
+            .next_back()
+            .ok_or_else(|| format!("Invalid reference: {reference}"))
+    }
+
+    fn merge_derives(&self, name: &str, base: &[&str]) -> Vec<String> {
+        let mut derives: Vec<String> = base.iter().map(|s| (*s).to_string()).collect();
+        if let Some(extra) = self.config.derive_extra.get(name) {
+            for tr in extra {
+                if !derives.contains(tr) {
+                    derives.push(tr.clone());
+                }
+            }
+        }
+        derives
+    }
+
     /// # Errors
     /// Returns an error if the `OpenAPI` specification cannot be transformed.
     pub fn transform(openapi: &'a OpenAPI, config: &'a Config) -> Result<ApiIr, String> {
@@ -60,10 +79,7 @@ impl<'a> Transformer<'a> {
     ) -> Result<TypeIr, String> {
         match schema_ref {
             ReferenceOr::Reference { reference } => {
-                let ref_name = reference
-                    .split('/')
-                    .next_back()
-                    .ok_or_else(|| format!("Invalid reference: {reference}"))?;
+                let ref_name = Self::resolve_ref_name(reference)?;
                 Ok(TypeIr::Reference(self.resolve_final_name(ref_name)))
             }
             ReferenceOr::Item(schema) => {
@@ -112,6 +128,7 @@ impl<'a> Transformer<'a> {
                 }))
             }
             SchemaKind::AnyOf { any_of } => self.schema_any_of_to_definition(name, any_of),
+            SchemaKind::OneOf { one_of } => self.schema_any_of_to_definition(name, one_of),
             SchemaKind::AllOf { all_of } => self.schema_all_of_to_definition(name, all_of),
             SchemaKind::Type(Type::Array(arr)) => {
                 let target = if let Some(items) = &arr.items {
@@ -134,6 +151,10 @@ impl<'a> Transformer<'a> {
         }
     }
 
+    fn is_nullable_ref(s_ref: &ReferenceOr<Box<Schema>>) -> bool {
+        matches!(s_ref, ReferenceOr::Item(s) if s.schema_data.nullable)
+    }
+
     fn schema_object_to_definition(
         &mut self,
         name: &str,
@@ -141,22 +162,15 @@ impl<'a> Transformer<'a> {
     ) -> Result<TypeDefinitionIr, String> {
         let mut fields = Vec::new();
         for (prop_name, prop_ref) in &obj.properties {
-            let rust_name = prop_name.to_snake_case();
             let field_type = self.schema_ref_boxed_to_type_ir(name, prop_name, prop_ref)?;
-            let required = obj.required.contains(prop_name);
+            let required = obj.required.contains(prop_name) && !Self::is_nullable_ref(prop_ref);
 
-            fields.push(FieldIr {
-                name: prop_name.clone(),
-                rust_name,
-                type_info: field_type,
+            fields.push(FieldIr::new(
+                prop_name,
+                field_type,
                 required,
-                validation: Self::extract_validation_from_ref(prop_ref),
-                serde_rename: if prop_name == &prop_name.to_snake_case() {
-                    None
-                } else {
-                    Some(prop_name.clone())
-                },
-            });
+                Self::extract_validation_from_ref(prop_ref),
+            ));
         }
         Ok(TypeDefinitionIr::Struct(StructIr {
             name: name.to_string(),
@@ -221,24 +235,19 @@ impl<'a> Transformer<'a> {
     }
 
     fn get_newtype_derives(&self, name: &str) -> Vec<String> {
-        let mut derives = vec![
-            "Debug".to_string(),
-            "Clone".to_string(),
-            "Serialize".to_string(),
-            "Deserialize".to_string(),
-            "PartialEq".to_string(),
-            "Default".to_string(),
-            "derive_more::Display".to_string(),
-            "derive_more::From".to_string(),
-        ];
-        if let Some(extra) = self.config.derive_extra.get(name) {
-            for tr in extra {
-                if !derives.contains(tr) {
-                    derives.push(tr.clone());
-                }
-            }
-        }
-        derives
+        self.merge_derives(
+            name,
+            &[
+                "Debug",
+                "Clone",
+                "Serialize",
+                "Deserialize",
+                "PartialEq",
+                "Default",
+                "derive_more::Display",
+                "derive_more::From",
+            ],
+        )
     }
 
     fn schema_any_of_to_definition(
@@ -249,11 +258,9 @@ impl<'a> Transformer<'a> {
         let mut variants = Vec::new();
         for (i, sub_ref) in any_of.iter().enumerate() {
             let variant_name = match sub_ref {
-                ReferenceOr::Reference { reference } => reference
-                    .split('/')
-                    .next_back()
-                    .ok_or("Invalid reference")?
-                    .to_string(),
+                ReferenceOr::Reference { reference } => {
+                    Self::resolve_ref_name(reference)?.to_string()
+                }
                 ReferenceOr::Item(_) => format!("Variant{i}"),
             };
             variants.push(self.schema_ref_to_type_ir(name, &variant_name, sub_ref)?);
@@ -275,10 +282,7 @@ impl<'a> Transformer<'a> {
             let resolved = match sub_ref {
                 ReferenceOr::Item(s) => s.clone(),
                 ReferenceOr::Reference { reference } => {
-                    let ref_name = reference
-                        .split('/')
-                        .next_back()
-                        .ok_or("Invalid reference")?;
+                    let ref_name = Self::resolve_ref_name(reference)?;
                     self.openapi
                         .components
                         .as_ref()
@@ -295,21 +299,14 @@ impl<'a> Transformer<'a> {
             };
             if let SchemaKind::Type(Type::Object(obj)) = &resolved.schema_kind {
                 for (prop_name, prop_ref) in &obj.properties {
-                    let rust_name = prop_name.to_snake_case();
                     let field_type = self.schema_ref_boxed_to_type_ir(name, prop_name, prop_ref)?;
                     let required = obj.required.contains(prop_name);
-                    fields.push(FieldIr {
-                        name: prop_name.clone(),
-                        rust_name,
-                        type_info: field_type,
+                    fields.push(FieldIr::new(
+                        prop_name,
+                        field_type,
                         required,
-                        validation: Self::extract_validation_from_ref(prop_ref),
-                        serde_rename: if prop_name == &prop_name.to_snake_case() {
-                            None
-                        } else {
-                            Some(prop_name.clone())
-                        },
-                    });
+                        Self::extract_validation_from_ref(prop_ref),
+                    ));
                 }
             }
         }
@@ -328,10 +325,7 @@ impl<'a> Transformer<'a> {
     ) -> Result<TypeIr, String> {
         match s_ref {
             ReferenceOr::Reference { reference } => {
-                let ref_name = reference
-                    .split('/')
-                    .next_back()
-                    .ok_or("Invalid reference")?;
+                let ref_name = Self::resolve_ref_name(reference)?;
                 Ok(TypeIr::Reference(self.resolve_final_name(ref_name)))
             }
             ReferenceOr::Item(s) => {
@@ -353,10 +347,7 @@ impl<'a> Transformer<'a> {
     ) -> Result<TypeIr, String> {
         match s_ref {
             ReferenceOr::Reference { reference } => {
-                let ref_name = reference
-                    .split('/')
-                    .next_back()
-                    .ok_or("Invalid reference")?;
+                let ref_name = Self::resolve_ref_name(reference)?;
                 Ok(TypeIr::Reference(self.resolve_final_name(ref_name)))
             }
             ReferenceOr::Item(s) => {
@@ -465,19 +456,12 @@ impl<'a> Transformer<'a> {
             for p in query_params {
                 if let openapiv3::Parameter::Query { parameter_data, .. } = p {
                     let field_type = self.resolve_param_type(parameter_data, &pascal_id)?;
-                    fields.push(FieldIr {
-                        name: parameter_data.name.clone(),
-                        rust_name: parameter_data.name.to_snake_case(),
-                        type_info: field_type,
-                        required: parameter_data.required,
-                        validation: Self::extract_validation(parameter_data),
-                        serde_rename: if parameter_data.name == parameter_data.name.to_snake_case()
-                        {
-                            None
-                        } else {
-                            Some(parameter_data.name.clone())
-                        },
-                    });
+                    fields.push(FieldIr::new(
+                        &parameter_data.name,
+                        field_type,
+                        parameter_data.required,
+                        Self::extract_validation(parameter_data),
+                    ));
                 }
             }
             self.types.insert(
@@ -564,12 +548,7 @@ impl<'a> Transformer<'a> {
                     }
                 }
                 ReferenceOr::Reference { reference } => Ok(Some(TypeIr::Reference(
-                    self.resolve_final_name(
-                        reference
-                            .split('/')
-                            .next_back()
-                            .ok_or("Invalid reference")?,
-                    ),
+                    self.resolve_final_name(Self::resolve_ref_name(reference)?),
                 ))),
             }
         } else {
@@ -601,12 +580,7 @@ impl<'a> Transformer<'a> {
                     }
                 }
                 ReferenceOr::Reference { reference } => Some(TypeIr::Reference(
-                    self.resolve_final_name(
-                        reference
-                            .split('/')
-                            .next_back()
-                            .ok_or("Invalid reference")?,
-                    ),
+                    self.resolve_final_name(Self::resolve_ref_name(reference)?),
                 )),
             };
             responses.push(ResponseIr { code, type_info });
@@ -636,64 +610,43 @@ impl<'a> Transformer<'a> {
     }
 
     fn get_struct_derives(&self, name: &str) -> Vec<String> {
-        let mut derives = vec![
-            "Debug".to_string(),
-            "Clone".to_string(),
-            "Serialize".to_string(),
-            "Deserialize".to_string(),
-            "PartialEq".to_string(),
-            "Default".to_string(),
-            "Validate".to_string(),
-            "Builder".to_string(),
-        ];
-        if let Some(extra) = self.config.derive_extra.get(name) {
-            for tr in extra {
-                if !derives.contains(tr) {
-                    derives.push(tr.clone());
-                }
-            }
-        }
-        derives
+        self.merge_derives(
+            name,
+            &[
+                "Debug",
+                "Clone",
+                "Serialize",
+                "Deserialize",
+                "PartialEq",
+                "Default",
+                "Validate",
+                "Builder",
+            ],
+        )
     }
 
     fn get_enum_derives(&self, name: &str) -> Vec<String> {
-        let mut derives = vec![
-            "Debug".to_string(),
-            "Clone".to_string(),
-            "Serialize".to_string(),
-            "Deserialize".to_string(),
-            "PartialEq".to_string(),
-            "Default".to_string(),
-            "strum::Display".to_string(),
-            "strum::EnumString".to_string(),
-            "strum::EnumIter".to_string(),
-        ];
-        if let Some(extra) = self.config.derive_extra.get(name) {
-            for tr in extra {
-                if !derives.contains(tr) {
-                    derives.push(tr.clone());
-                }
-            }
-        }
-        derives
+        self.merge_derives(
+            name,
+            &[
+                "Debug",
+                "Clone",
+                "Serialize",
+                "Deserialize",
+                "PartialEq",
+                "Default",
+                "strum::Display",
+                "strum::EnumString",
+                "strum::EnumIter",
+            ],
+        )
     }
 
     fn get_any_of_derives(&self, name: &str) -> Vec<String> {
-        let mut derives = vec![
-            "Debug".to_string(),
-            "Clone".to_string(),
-            "Serialize".to_string(),
-            "Deserialize".to_string(),
-            "PartialEq".to_string(),
-        ];
-        if let Some(extra) = self.config.derive_extra.get(name) {
-            for tr in extra {
-                if !derives.contains(tr) {
-                    derives.push(tr.clone());
-                }
-            }
-        }
-        derives
+        self.merge_derives(
+            name,
+            &["Debug", "Clone", "Serialize", "Deserialize", "PartialEq"],
+        )
     }
 
     fn extract_validation_from_ref(s_ref: &ReferenceOr<Box<Schema>>) -> Vec<ValidationIr> {
@@ -715,16 +668,13 @@ impl<'a> Transformer<'a> {
 
     fn extract_validation_from_schema(schema: &Schema) -> Vec<ValidationIr> {
         let mut v = Vec::new();
-        if let SchemaKind::Type(Type::String(s)) = &schema.schema_kind {
-            if s.min_length.is_some() || s.max_length.is_some() {
-                v.push(ValidationIr::Length {
-                    min: s.min_length.map(|m| m as u64),
-                    max: s.max_length.map(|m| m as u64),
-                });
-            }
-            if let Some(pat) = &s.pattern {
-                v.push(ValidationIr::Regex(pat.clone()));
-            }
+        if let SchemaKind::Type(Type::String(s)) = &schema.schema_kind
+            && (s.min_length.is_some() || s.max_length.is_some())
+        {
+            v.push(ValidationIr::Length {
+                min: s.min_length.map(|m| m as u64),
+                max: s.max_length.map(|m| m as u64),
+            });
         }
         if let SchemaKind::Type(Type::Integer(i)) = &schema.schema_kind
             && (i.minimum.is_some() || i.maximum.is_some())
