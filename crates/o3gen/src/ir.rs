@@ -22,6 +22,7 @@ pub struct StructIr {
     pub name: String,
     pub fields: Vec<FieldIr>,
     pub derives: Vec<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +31,7 @@ pub struct EnumIr {
     pub variants: Vec<EnumVariantIr>,
     pub derives: Vec<String>,
     pub rename_all: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +39,7 @@ pub struct NewtypeIr {
     pub name: String,
     pub target: TypeIr,
     pub derives: Vec<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +50,7 @@ pub struct FieldIr {
     pub required: bool,
     pub validation: Vec<ValidationIr>,
     pub serde_rename: Option<String>,
+    pub description: Option<String>,
 }
 
 impl FieldIr {
@@ -56,6 +60,7 @@ impl FieldIr {
         type_info: TypeIr,
         required: bool,
         validation: Vec<ValidationIr>,
+        description: Option<String>,
     ) -> Self {
         let rust_name = name.to_snake_case();
         Self {
@@ -69,6 +74,7 @@ impl FieldIr {
             type_info,
             required,
             validation,
+            description,
         }
     }
 }
@@ -78,12 +84,14 @@ pub struct EnumVariantIr {
     pub name: String,
     pub rust_name: String,
     pub value: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AliasIr {
     pub name: String,
     pub target: TypeIr,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +99,7 @@ pub struct AnyOfIr {
     pub name: String,
     pub variants: Vec<TypeIr>,
     pub derives: Vec<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +137,7 @@ pub struct OperationIr {
     pub parameters: Vec<ParameterIr>,
     pub request_body: Option<TypeIr>,
     pub responses: Vec<ResponseIr>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +146,7 @@ pub struct ParameterIr {
     pub location: ParameterLocation,
     pub required: bool,
     pub type_info: TypeIr,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

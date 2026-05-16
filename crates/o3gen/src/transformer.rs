@@ -127,10 +127,13 @@ impl<'a> Transformer<'a> {
         name: &str,
         schema: &Schema,
     ) -> Result<TypeDefinitionIr, String> {
+        let description = schema.schema_data.description.clone();
         match &schema.schema_kind {
-            SchemaKind::Type(Type::Object(obj)) => self.schema_object_to_definition(name, obj),
+            SchemaKind::Type(Type::Object(obj)) => {
+                self.schema_object_to_definition(name, obj, description)
+            }
             SchemaKind::Type(Type::String(s)) if !s.enumeration.is_empty() => {
-                Ok(self.schema_enum_to_definition(name, s))
+                Ok(self.schema_enum_to_definition(name, s, description))
             }
 
             SchemaKind::Type(Type::String(_) | Type::Integer(_))
@@ -141,11 +144,18 @@ impl<'a> Transformer<'a> {
                     name: name.to_string(),
                     target,
                     derives: self.get_newtype_derives(name),
+                    description,
                 }))
             }
-            SchemaKind::AnyOf { any_of } => self.schema_any_of_to_definition(name, any_of),
-            SchemaKind::OneOf { one_of } => self.schema_any_of_to_definition(name, one_of),
-            SchemaKind::AllOf { all_of } => self.schema_all_of_to_definition(name, all_of),
+            SchemaKind::AnyOf { any_of } => {
+                self.schema_any_of_to_definition(name, any_of, description)
+            }
+            SchemaKind::OneOf { one_of } => {
+                self.schema_any_of_to_definition(name, one_of, description.clone())
+            }
+            SchemaKind::AllOf { all_of } => {
+                self.schema_all_of_to_definition(name, all_of, description)
+            }
             SchemaKind::Type(Type::Array(arr)) => {
                 let target = if let Some(items) = &arr.items {
                     self.schema_ref_boxed_to_type_ir(name, "Item", items)?
@@ -155,10 +165,11 @@ impl<'a> Transformer<'a> {
                 Ok(TypeDefinitionIr::Alias(AliasIr {
                     name: name.to_string(),
                     target: TypeIr::Array(Box::new(target)),
+                    description,
                 }))
             }
             SchemaKind::Any(any) if !any.properties.is_empty() => {
-                self.schema_any_to_definition(name, any)
+                self.schema_any_to_definition(name, any, description)
             }
             _ => {
                 eprintln!(
@@ -169,6 +180,7 @@ impl<'a> Transformer<'a> {
                 Ok(TypeDefinitionIr::Alias(AliasIr {
                     name: name.to_string(),
                     target,
+                    description,
                 }))
             }
         }
@@ -182,6 +194,7 @@ impl<'a> Transformer<'a> {
         &mut self,
         name: &str,
         any: &AnySchema,
+        description: Option<String>,
     ) -> Result<TypeDefinitionIr, String> {
         let mut fields = Vec::new();
         for (prop_name, prop_ref) in &any.properties {
@@ -193,12 +206,14 @@ impl<'a> Transformer<'a> {
                 field_type,
                 required,
                 Self::extract_validation_from_ref(prop_ref),
+                Self::extract_description_from_ref(prop_ref),
             ));
         }
         Ok(TypeDefinitionIr::Struct(StructIr {
             name: name.to_string(),
             fields,
             derives: self.get_struct_derives(name),
+            description,
         }))
     }
 
@@ -206,6 +221,7 @@ impl<'a> Transformer<'a> {
         &mut self,
         name: &str,
         obj: &openapiv3::ObjectType,
+        description: Option<String>,
     ) -> Result<TypeDefinitionIr, String> {
         let mut fields = Vec::new();
         for (prop_name, prop_ref) in &obj.properties {
@@ -217,16 +233,23 @@ impl<'a> Transformer<'a> {
                 field_type,
                 required,
                 Self::extract_validation_from_ref(prop_ref),
+                Self::extract_description_from_ref(prop_ref),
             ));
         }
         Ok(TypeDefinitionIr::Struct(StructIr {
             name: name.to_string(),
             fields,
             derives: self.get_struct_derives(name),
+            description,
         }))
     }
 
-    fn schema_enum_to_definition(&self, name: &str, s: &openapiv3::StringType) -> TypeDefinitionIr {
+    fn schema_enum_to_definition(
+        &self,
+        name: &str,
+        s: &openapiv3::StringType,
+        description: Option<String>,
+    ) -> TypeDefinitionIr {
         let mut variants = Vec::new();
         let mut raw_values = Vec::new();
         for v in s.enumeration.iter().flatten() {
@@ -234,6 +257,7 @@ impl<'a> Transformer<'a> {
                 name: v.clone(),
                 rust_name: v.to_pascal_case(),
                 value: v.clone(),
+                description: None,
             });
             raw_values.push(v.clone());
         }
@@ -245,6 +269,7 @@ impl<'a> Transformer<'a> {
             variants,
             derives: self.get_enum_derives(name),
             rename_all,
+            description,
         })
     }
 
@@ -301,6 +326,7 @@ impl<'a> Transformer<'a> {
         &mut self,
         name: &str,
         any_of: &[ReferenceOr<Schema>],
+        description: Option<String>,
     ) -> Result<TypeDefinitionIr, String> {
         let mut variants = Vec::new();
         for (i, sub_ref) in any_of.iter().enumerate() {
@@ -316,6 +342,7 @@ impl<'a> Transformer<'a> {
             name: name.to_string(),
             variants,
             derives: self.get_any_of_derives(name),
+            description,
         }))
     }
 
@@ -323,6 +350,7 @@ impl<'a> Transformer<'a> {
         &mut self,
         name: &str,
         all_of: &[ReferenceOr<Schema>],
+        description: Option<String>,
     ) -> Result<TypeDefinitionIr, String> {
         let mut fields = Vec::new();
         for sub_ref in all_of {
@@ -353,6 +381,7 @@ impl<'a> Transformer<'a> {
                         field_type,
                         required,
                         Self::extract_validation_from_ref(prop_ref),
+                        Self::extract_description_from_ref(prop_ref),
                     ));
                 }
             }
@@ -361,6 +390,7 @@ impl<'a> Transformer<'a> {
             name: name.to_string(),
             fields,
             derives: self.get_struct_derives(name),
+            description,
         }))
     }
 
@@ -468,7 +498,8 @@ impl<'a> Transformer<'a> {
         {
             let child_name = format!("{parent}{}", to_pascal_case(field));
             // Register the enum type
-            let def = self.schema_enum_to_definition(&child_name, st);
+            let def =
+                self.schema_enum_to_definition(&child_name, st, s.schema_data.description.clone());
             self.types.insert(child_name.clone(), def);
             self.taken_names.insert(child_name.clone());
             return Some(child_name);
@@ -538,6 +569,7 @@ impl<'a> Transformer<'a> {
                         field_type,
                         parameter_data.required,
                         Self::extract_validation(parameter_data),
+                        parameter_data.description.clone(),
                     ));
                 }
             }
@@ -547,6 +579,7 @@ impl<'a> Transformer<'a> {
                     name: name.clone(),
                     fields,
                     derives: self.get_struct_derives(&name),
+                    description: None,
                 }),
             );
             Some(name)
@@ -581,6 +614,7 @@ impl<'a> Transformer<'a> {
                 location,
                 required: data.required,
                 type_info: self.resolve_param_type(data, &pascal_id)?,
+                description: data.description.clone(),
             });
         }
 
@@ -590,6 +624,7 @@ impl<'a> Transformer<'a> {
                 location: ParameterLocation::Query,
                 required: true,
                 type_info: TypeIr::Reference(q_name),
+                description: None,
             });
         }
 
@@ -603,6 +638,7 @@ impl<'a> Transformer<'a> {
             parameters,
             request_body,
             responses,
+            description: op.description.clone(),
         })
     }
 
@@ -724,6 +760,14 @@ impl<'a> Transformer<'a> {
             name,
             &["Debug", "Clone", "Serialize", "Deserialize", "PartialEq"],
         )
+    }
+
+    fn extract_description_from_ref(s_ref: &ReferenceOr<Box<Schema>>) -> Option<String> {
+        if let ReferenceOr::Item(s) = s_ref {
+            s.schema_data.description.clone()
+        } else {
+            None
+        }
     }
 
     fn extract_validation_from_ref(s_ref: &ReferenceOr<Box<Schema>>) -> Vec<ValidationIr> {

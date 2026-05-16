@@ -139,10 +139,10 @@ impl Generator {
                 dead_code,
                 non_camel_case_types,
                 unused_imports,
+                unused_mut,
                 unreachable_pub,
                 unused_qualifications,
                 unused_variables,
-                unused_must_use,
             )]
             pub mod types {
                 use serde::{Serialize, Deserialize};
@@ -172,6 +172,7 @@ impl Generator {
                 .map(|p| ParameterDetails {
                     name: p.name.clone(),
                     rust_type: Self::emit_type_ref(&p.type_info),
+                    description: p.description.clone(),
                 })
                 .collect();
 
@@ -182,6 +183,7 @@ impl Generator {
                 parameters,
                 request_body_type: op.request_body.as_ref().map(Self::emit_type_ref),
                 path: op.path,
+                description: op.description.clone(),
             });
         }
         operations_details.sort_by(|a, b| a.operation_id.cmp(&b.operation_id));
@@ -219,13 +221,27 @@ impl Generator {
         }
     }
 
+    fn emit_doc(desc: Option<&str>) -> TokenStream {
+        if let Some(d) = desc {
+            let d = d
+                .trim()
+                .replace("```\n", "```text\n")
+                .replace("```\r\n", "```text\n");
+            quote! { #[doc = #d] }
+        } else {
+            TokenStream::new()
+        }
+    }
+
     fn emit_struct_definition(s: &crate::ir::StructIr) -> TokenStream {
         let name = to_ident(&s.name);
         let builder_name = to_ident(&format!("{0}Builder", s.name));
         let derives = Self::emit_derives(&s.derives);
+        let doc_attr = Self::emit_doc(s.description.as_deref());
         let fields = s.fields.iter().map(|f| {
             let f_name = to_ident(&f.rust_name);
             let f_type = Self::emit_type_info(&f.type_info, f.required);
+            let f_doc_attr = Self::emit_doc(f.description.as_deref());
             let serde_attr = f
                 .serde_rename
                 .as_ref()
@@ -237,6 +253,7 @@ impl Generator {
                 quote! { #[builder(default)] }
             };
             quote! {
+                #f_doc_attr
                 #serde_attr
                 #validate_attr
                 #builder_attr
@@ -244,6 +261,7 @@ impl Generator {
             }
         });
         quote! {
+            #doc_attr
             #derives
             #[serde(deny_unknown_fields)]
             #[builder(setter(into, strip_option), build_fn(name = "build_inner", vis = "pub(crate)"))]
@@ -308,6 +326,7 @@ impl Generator {
     fn emit_enum_definition(e: &crate::ir::EnumIr) -> TokenStream {
         let name = to_ident(&e.name);
         let derives = Self::emit_derives(&e.derives);
+        let doc_attr = Self::emit_doc(e.description.as_deref());
         let rename_all_attr = e
             .rename_all
             .as_ref()
@@ -316,6 +335,7 @@ impl Generator {
         let variants = e.variants.iter().enumerate().map(|(i, v)| {
             let v_name = to_ident(&v.rust_name);
             let value = &v.value;
+            let v_doc_attr = Self::emit_doc(v.description.as_deref());
             let default_attr = if i == 0 {
                 quote! { #[default] }
             } else {
@@ -329,12 +349,14 @@ impl Generator {
             };
 
             quote! {
+                #v_doc_attr
                 #default_attr
                 #rename_attr
                 #v_name,
             }
         });
         quote! {
+            #doc_attr
             #derives
             #rename_all_attr
             pub enum #name {
@@ -346,14 +368,20 @@ impl Generator {
     fn emit_alias_definition(a: &crate::ir::AliasIr) -> TokenStream {
         let name = to_ident(&a.name);
         let target = Self::emit_type_info(&a.target, true);
-        quote! { pub type #name = #target; }
+        let doc_attr = Self::emit_doc(a.description.as_deref());
+        quote! {
+            #doc_attr
+            pub type #name = #target;
+        }
     }
 
     fn emit_newtype_definition(n: &crate::ir::NewtypeIr) -> TokenStream {
         let name = to_ident(&n.name);
         let derives = Self::emit_derives(&n.derives);
         let target = Self::emit_type_info(&n.target, true);
+        let doc_attr = Self::emit_doc(n.description.as_deref());
         quote! {
+            #doc_attr
             #derives
             pub struct #name(pub #target);
         }
@@ -364,6 +392,7 @@ impl Generator {
         let mut derives_list = a.derives.clone();
         derives_list.retain(|d| d != "Default");
         let derives = Self::emit_derives(&derives_list);
+        let doc_attr = Self::emit_doc(a.description.as_deref());
 
         let variants = a.variants.iter().enumerate().map(|(i, v)| {
             let v_name = match v {
@@ -371,7 +400,9 @@ impl Generator {
                 _ => to_ident(&format!("Variant{i}")),
             };
             let v_type = Self::emit_type_info(v, true);
+            let v_doc_attr = Self::emit_doc(None); // anyof variants don't have distinct docs easily
             quote! {
+                #v_doc_attr
                 #[serde(untagged)]
                 #v_name(#v_type),
             }
@@ -385,6 +416,7 @@ impl Generator {
         let first_variant_type = Self::emit_type_info(first_variant_type_ir, true);
 
         quote! {
+            #doc_attr
             #derives
             pub enum #name {
                 #(#variants)*
