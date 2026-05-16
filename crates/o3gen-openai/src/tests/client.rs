@@ -44,16 +44,26 @@ async fn test_list_models() {
         &crate::types::ListModelsResponse {
             object: crate::types::ListModelsResponseObject::List,
             data: vec![
-                serde_json::json!({"id": "gpt-4o", "object": "model", "created": 1661989079, "owned_by": "openai"}),
-                serde_json::json!({"id": "gpt-3.5-turbo", "object": "model", "created": 1677610605, "owned_by": "openai"}),
+                crate::types::Model {
+                    id: "gpt-4o".to_string(),
+                    object: crate::types::ModelObject::Model,
+                    created: 1661989079,
+                    owned_by: "openai".to_string(),
+                },
+                crate::types::Model {
+                    id: "gpt-3.5-turbo".to_string(),
+                    object: crate::types::ModelObject::Model,
+                    created: 1677610605,
+                    owned_by: "openai".to_string(),
+                },
             ],
         },
     );
 
     let resp = OpenAIApi::list_models(&client).await.unwrap();
     assert_eq!(resp.data.len(), 2);
-    assert_eq!(resp.data[0]["id"], "gpt-4o");
-    assert_eq!(resp.data[1]["id"], "gpt-3.5-turbo");
+    assert_eq!(resp.data[0].id, "gpt-4o");
+    assert_eq!(resp.data[1].id, "gpt-3.5-turbo");
 
     mock.assert_async().await;
 }

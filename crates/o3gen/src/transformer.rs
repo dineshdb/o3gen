@@ -2,7 +2,8 @@ use heck::{ToKebabCase, ToLowerCamelCase, ToPascalCase, ToSnakeCase};
 use http::{Method, StatusCode};
 use indexmap::IndexMap;
 use openapiv3::{
-    OpenAPI, ParameterData, ParameterSchemaOrContent, ReferenceOr, Schema, SchemaKind, Type,
+    AnySchema, OpenAPI, ParameterData, ParameterSchemaOrContent, ReferenceOr, Schema, SchemaKind,
+    Type,
 };
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -156,6 +157,9 @@ impl<'a> Transformer<'a> {
                     target: TypeIr::Array(Box::new(target)),
                 }))
             }
+            SchemaKind::Any(any) if !any.properties.is_empty() => {
+                self.schema_any_to_definition(name, any)
+            }
             _ => {
                 eprintln!(
                     "WARN: schema '{name}' fell through to alias catch-all, schema_kind={:?}",
@@ -172,6 +176,30 @@ impl<'a> Transformer<'a> {
 
     fn is_nullable_ref(s_ref: &ReferenceOr<Box<Schema>>) -> bool {
         matches!(s_ref, ReferenceOr::Item(s) if s.schema_data.nullable)
+    }
+
+    fn schema_any_to_definition(
+        &mut self,
+        name: &str,
+        any: &AnySchema,
+    ) -> Result<TypeDefinitionIr, String> {
+        let mut fields = Vec::new();
+        for (prop_name, prop_ref) in &any.properties {
+            let field_type = self.schema_ref_boxed_to_type_ir(name, prop_name, prop_ref)?;
+            let required = any.required.contains(prop_name) && !Self::is_nullable_ref(prop_ref);
+
+            fields.push(FieldIr::new(
+                prop_name,
+                field_type,
+                required,
+                Self::extract_validation_from_ref(prop_ref),
+            ));
+        }
+        Ok(TypeDefinitionIr::Struct(StructIr {
+            name: name.to_string(),
+            fields,
+            derives: self.get_struct_derives(name),
+        }))
     }
 
     fn schema_object_to_definition(
