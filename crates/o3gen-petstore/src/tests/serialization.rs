@@ -5,7 +5,7 @@ fn test_json_serialization_pet() {
     let pet = types::Pet {
         id: "123".to_string(),
         name: "doggie".to_string(),
-        species: types::PetSpecies::Dog,
+        species: types::Species::Dog,
         status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),

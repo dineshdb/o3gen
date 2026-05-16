@@ -17,9 +17,69 @@ pub enum TypeDefinitionIr {
     Newtype(NewtypeIr),
 }
 
+impl TypeDefinitionIr {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Struct(s) => s.name.as_str(),
+            Self::Enum(e) => e.name.as_str(),
+            Self::Alias(a) => a.name.as_str(),
+            Self::AnyOf(a) => a.name.as_str(),
+            Self::Newtype(n) => n.name.as_str(),
+        }
+    }
+
+    pub fn set_name(&mut self, name: String) {
+        match self {
+            Self::Struct(s) => s.name.set_string(name),
+            Self::Enum(e) => e.name.set_string(name),
+            Self::Alias(a) => a.name.set_string(name),
+            Self::AnyOf(a) => a.name.set_string(name),
+            Self::Newtype(n) => n.name.set_string(name),
+        }
+    }
+
+    #[must_use]
+    pub fn is_generated(&self) -> bool {
+        match self {
+            Self::Struct(s) => s.name.is_generated(),
+            Self::Enum(e) => e.name.is_generated(),
+            Self::Alias(a) => a.name.is_generated(),
+            Self::AnyOf(a) => a.name.is_generated(),
+            Self::Newtype(n) => n.name.is_generated(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Name {
+    Provided(String),
+    Generated(String),
+}
+
+impl Name {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Provided(s) | Self::Generated(s) => s,
+        }
+    }
+
+    pub fn set_string(&mut self, new_name: String) {
+        match self {
+            Self::Provided(s) | Self::Generated(s) => *s = new_name,
+        }
+    }
+
+    #[must_use]
+    pub fn is_generated(&self) -> bool {
+        matches!(self, Self::Generated(_))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StructIr {
-    pub name: String,
+    pub name: Name,
     pub fields: Vec<FieldIr>,
     pub derives: Vec<String>,
     pub description: Option<String>,
@@ -27,7 +87,7 @@ pub struct StructIr {
 
 #[derive(Debug, Clone)]
 pub struct EnumIr {
-    pub name: String,
+    pub name: Name,
     pub variants: Vec<EnumVariantIr>,
     pub derives: Vec<String>,
     pub rename_all: Option<String>,
@@ -36,7 +96,7 @@ pub struct EnumIr {
 
 #[derive(Debug, Clone)]
 pub struct NewtypeIr {
-    pub name: String,
+    pub name: Name,
     pub target: TypeIr,
     pub derives: Vec<String>,
     pub description: Option<String>,
@@ -89,17 +149,23 @@ pub struct EnumVariantIr {
 
 #[derive(Debug, Clone)]
 pub struct AliasIr {
-    pub name: String,
+    pub name: Name,
     pub target: TypeIr,
     pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AnyOfIr {
-    pub name: String,
-    pub variants: Vec<TypeIr>,
+    pub name: Name,
+    pub variants: Vec<VariantIr>,
     pub derives: Vec<String>,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VariantIr {
+    pub name: String,
+    pub type_info: TypeIr,
 }
 
 #[derive(Debug, Clone)]

@@ -1,8 +1,7 @@
 use crate::PetApi;
 use crate::PetApiClient;
 use crate::types::{
-    ListPetsQuery, ListPetsSpecies, Pet, PetCollection, PetCollectionPagination, PetSpecies,
-    PetStatus,
+    ListPetsParams, ListPetsSpecies, Pagination, Pet, PetCollection, PetStatus, Species,
 };
 use mockito::Server;
 
@@ -20,14 +19,14 @@ async fn test_list_pets() {
         updated_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
         currency: "USD".to_string(),
         price: "100.00".to_string(),
-        species: PetSpecies::Dog,
+        species: Species::Dog,
         status: PetStatus::Available,
         ..Default::default()
     };
 
     let mock_pets = PetCollection {
         data: vec![mock_pet],
-        pagination: PetCollectionPagination {
+        pagination: Pagination {
             total_items: 1,
             total_pages: 1,
             limit: 10,
@@ -43,7 +42,7 @@ async fn test_list_pets() {
         .create_async()
         .await;
 
-    let query = ListPetsQuery {
+    let query = ListPetsParams {
         species: Some(ListPetsSpecies::Dog),
         page: Some(1),
         limit: Some(10),
@@ -69,7 +68,7 @@ async fn test_get_pet() {
         updated_at: chrono::DateTime::from_timestamp(1736412000, 0).unwrap(),
         currency: "USD".to_string(),
         price: "200.00".to_string(),
-        species: PetSpecies::Dog,
+        species: Species::Dog,
         status: PetStatus::Available,
         ..Default::default()
     };
@@ -99,6 +98,6 @@ async fn test_api_error() {
         .create_async()
         .await;
 
-    let result = client.list_pets(ListPetsQuery::default()).await;
+    let result = client.list_pets(ListPetsParams::default()).await;
     assert!(result.is_err());
 }

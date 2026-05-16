@@ -1,4 +1,5 @@
-use heck::{ToKebabCase, ToLowerCamelCase, ToPascalCase, ToSnakeCase};
+use crate::helpers::to_pascal_case;
+use heck::ToPascalCase;
 use http::{Method, StatusCode};
 use indexmap::IndexMap;
 use openapiv3::{
@@ -6,13 +7,12 @@ use openapiv3::{
     Type,
 };
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 
 use crate::config::Config;
-use crate::helpers::to_pascal_case;
 use crate::ir::{
-    AliasIr, AnyOfIr, ApiIr, EnumIr, EnumVariantIr, FieldIr, NewtypeIr, OperationIr, ParameterIr,
-    ParameterLocation, PrimitiveType, ResponseIr, StructIr, TypeDefinitionIr, TypeIr, ValidationIr,
+    AliasIr, AnyOfIr, ApiIr, EnumIr, EnumVariantIr, FieldIr, Name, NewtypeIr, OperationIr,
+    ParameterIr, ParameterLocation, PrimitiveType, ResponseIr, StructIr, TypeDefinitionIr, TypeIr,
+    ValidationIr, VariantIr,
 };
 
 #[derive(Debug)]
@@ -20,6 +20,7 @@ pub struct Transformer<'a> {
     openapi: &'a OpenAPI,
     config: &'a Config,
     types: IndexMap<String, TypeDefinitionIr>,
+    operations: Vec<OperationIr>,
     taken_names: HashSet<String>,
     fingerprints: HashMap<String, String>,
 }
@@ -51,23 +52,192 @@ impl<'a> Transformer<'a> {
             openapi,
             config,
             types: IndexMap::new(),
+            operations: Vec::new(),
             taken_names: HashSet::new(),
             fingerprints: HashMap::new(),
         };
 
         transformer.process_schemas()?;
-        let operations = transformer.process_paths()?;
+        transformer.operations = transformer.process_paths()?;
+
+        transformer.apply_ir_transformations();
 
         Ok(ApiIr {
             types: transformer.types,
-            operations,
+            operations: transformer.operations,
         })
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn apply_ir_transformations(&mut self) {
+        // 1. Refine type names: strip redundant prefixes from Generated types
+        let mut type_renames = HashMap::new();
+        let mut current_taken_names: HashSet<String> = self.types.keys().cloned().collect();
+
+        let mut type_names_sorted: Vec<String> = self.types.keys().cloned().collect();
+        // Sort by length descending to handle nested prefixing correctly
+        type_names_sorted.sort_by_key(|b| std::cmp::Reverse(b.len()));
+
+        for name in type_names_sorted {
+            let Some(def) = self.types.get(&name) else {
+                continue;
+            };
+            if def.is_generated() {
+                // Try to find a parent prefix to strip
+                let mut best_prefix: Option<String> = None;
+                for potential_prefix in self.types.keys() {
+                    if name.starts_with(potential_prefix) && name.len() > potential_prefix.len() {
+                        match &best_prefix {
+                            Some(current_best) if potential_prefix.len() > current_best.len() => {
+                                best_prefix = Some(potential_prefix.clone());
+                            }
+                            None => {
+                                best_prefix = Some(potential_prefix.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if let Some(prefix) = best_prefix {
+                    let candidate_name = name[prefix.len()..].to_string();
+
+                    if !candidate_name.is_empty()
+                        && candidate_name
+                            .chars()
+                            .next()
+                            .is_some_and(char::is_alphabetic)
+                        && !Self::is_generic_name(&candidate_name)
+                        && !current_taken_names.contains(&candidate_name)
+                        && candidate_name.len() >= 3
+                    {
+                        type_renames.insert(name.clone(), candidate_name.clone());
+                        current_taken_names.insert(candidate_name);
+                    }
+                }
+            }
+        }
+
+        // Apply type renames
+        for (old_name, new_name) in &type_renames {
+            if let Some(mut def) = self.types.shift_remove(old_name) {
+                def.set_name(new_name.clone());
+                self.types.insert(new_name.clone(), def);
+            }
+        }
+
+        // Update all references in the IR to the new type names
+        for def in self.types.values_mut() {
+            Self::update_type_references(def, &type_renames);
+        }
+        for op in &mut self.operations {
+            if let Some(rb) = &mut op.request_body {
+                Self::update_type_ir_reference(rb, &type_renames);
+            }
+            for param in &mut op.parameters {
+                Self::update_type_ir_reference(&mut param.type_info, &type_renames);
+            }
+            for resp in &mut op.responses {
+                if let Some(ti) = &mut resp.type_info {
+                    Self::update_type_ir_reference(ti, &type_renames);
+                }
+            }
+        }
+
+        // 2. Refine anyOf variant names to be descriptive and unique
+        for def in self.types.values_mut() {
+            let parent_name = def.name().to_string();
+
+            if let TypeDefinitionIr::AnyOf(any_of) = def {
+                let mut seen_names = HashSet::new();
+                for variant in &mut any_of.variants {
+                    let mut descriptive_name = match &variant.type_info {
+                        TypeIr::Reference(r) => r.clone(),
+                        TypeIr::Enum(e) => e.clone(),
+                        TypeIr::Primitive(p) => match p {
+                            PrimitiveType::String => "String".to_string(),
+                            PrimitiveType::Integer => "Integer".to_string(),
+                            PrimitiveType::Number => "Number".to_string(),
+                            PrimitiveType::Boolean => "Boolean".to_string(),
+                            _ => variant.name.clone(),
+                        },
+                        TypeIr::Array(_) => "Array".to_string(),
+                        TypeIr::Map(_) => "Map".to_string(),
+                        TypeIr::Value => "Value".to_string(),
+                    };
+
+                    // Heuristic: strip shared prefix with parent
+                    let common =
+                        Self::find_common_prefix(&[parent_name.clone(), descriptive_name.clone()])
+                            .unwrap_or_default();
+                    if !common.is_empty() && descriptive_name.starts_with(&common) {
+                        let stripped = descriptive_name[common.len()..].to_string();
+                        if !stripped.is_empty()
+                            && stripped.chars().next().is_some_and(char::is_alphabetic)
+                        {
+                            descriptive_name = stripped;
+                        }
+                    }
+
+                    if descriptive_name.is_empty()
+                        || descriptive_name.chars().all(|c| !c.is_alphanumeric())
+                    {
+                        descriptive_name.clone_from(&variant.name);
+                    }
+
+                    let mut final_name = descriptive_name.clone();
+                    let mut counter = 2;
+                    while seen_names.contains(&final_name) {
+                        final_name = format!("{descriptive_name}{counter}");
+                        counter += 1;
+                    }
+                    variant.name.clone_from(&final_name);
+                    seen_names.insert(final_name);
+                }
+            }
+        }
+    }
+
+    fn update_type_references(def: &mut TypeDefinitionIr, renames: &HashMap<String, String>) {
+        match def {
+            TypeDefinitionIr::Struct(s) => {
+                for field in &mut s.fields {
+                    Self::update_type_ir_reference(&mut field.type_info, renames);
+                }
+            }
+            TypeDefinitionIr::Enum(_) => {}
+            TypeDefinitionIr::Alias(a) => {
+                Self::update_type_ir_reference(&mut a.target, renames);
+            }
+            TypeDefinitionIr::AnyOf(a) => {
+                for variant in &mut a.variants {
+                    Self::update_type_ir_reference(&mut variant.type_info, renames);
+                }
+            }
+            TypeDefinitionIr::Newtype(n) => {
+                Self::update_type_ir_reference(&mut n.target, renames);
+            }
+        }
+    }
+
+    fn update_type_ir_reference(type_ir: &mut TypeIr, renames: &HashMap<String, String>) {
+        match type_ir {
+            TypeIr::Reference(name) | TypeIr::Enum(name) => {
+                if let Some(new_name) = renames.get(name) {
+                    *name = new_name.clone();
+                }
+            }
+            TypeIr::Array(inner) | TypeIr::Map(inner) => {
+                Self::update_type_ir_reference(inner, renames);
+            }
+            _ => {}
+        }
     }
 
     fn process_schemas(&mut self) -> Result<(), String> {
         if let Some(components) = &self.openapi.components {
             for (name, schema_ref) in &components.schemas {
-                self.resolve_and_register_type(name, schema_ref)?;
+                self.resolve_and_register_type_internal(name, schema_ref, false)?;
             }
         }
         Ok(())
@@ -78,27 +248,25 @@ impl<'a> Transformer<'a> {
         name: &str,
         schema_ref: &ReferenceOr<Schema>,
     ) -> Result<TypeIr, String> {
+        self.resolve_and_register_type_internal(name, schema_ref, true)
+    }
+
+    fn resolve_and_register_type_internal(
+        &mut self,
+        name: &str,
+        schema_ref: &ReferenceOr<Schema>,
+        is_generated: bool,
+    ) -> Result<TypeIr, String> {
         match schema_ref {
             ReferenceOr::Reference { reference } => {
                 let ref_name = Self::resolve_ref_name(reference)?;
                 Ok(TypeIr::Reference(self.resolve_final_name(ref_name)))
             }
             ReferenceOr::Item(schema) => {
-                // For named schemas, always use the provided name
-                // For unnamed schemas, use fingerprint deduplication
                 let candidate = self.resolve_final_name(name);
 
-                // Check if this is an unnamed schema (auto-generated name)
-                let is_named = !name.is_empty() && !name.starts_with('{');
-
-                if is_named {
-                    // Named schema: always register with its own name
-                    self.taken_names.insert(candidate.clone());
-                    let def = self.schema_to_definition(&candidate, schema)?;
-                    self.types.insert(candidate.clone(), def);
-                    Ok(TypeIr::Reference(candidate))
-                } else {
-                    // Unnamed schema: use fingerprint deduplication
+                if is_generated {
+                    // Inline schema (auto-generated name)
                     let fp = serde_json::to_string(schema).unwrap_or_default();
                     if let Some(existing_name) = self.fingerprints.get(&fp) {
                         return Ok(TypeIr::Reference(existing_name.clone()));
@@ -114,26 +282,49 @@ impl<'a> Transformer<'a> {
                     self.fingerprints.insert(fp, final_name.clone());
                     self.taken_names.insert(final_name.clone());
 
-                    let def = self.schema_to_definition(&final_name, schema)?;
+                    let def = self.schema_to_definition(
+                        &final_name,
+                        schema,
+                        Name::Generated(final_name.clone()),
+                    )?;
                     self.types.insert(final_name.clone(), def);
                     Ok(TypeIr::Reference(final_name))
+                } else {
+                    // Named component schema
+                    self.taken_names.insert(candidate.clone());
+                    let def = self.schema_to_definition(
+                        &candidate,
+                        schema,
+                        Name::Provided(candidate.clone()),
+                    )?;
+                    self.types.insert(candidate.clone(), def);
+                    Ok(TypeIr::Reference(candidate))
                 }
             }
         }
+    }
+
+    fn resolve_final_name(&self, name: &str) -> String {
+        self.config
+            .rename
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
     }
 
     fn schema_to_definition(
         &mut self,
         name: &str,
         schema: &Schema,
+        ir_name: Name,
     ) -> Result<TypeDefinitionIr, String> {
         let description = schema.schema_data.description.clone();
         match &schema.schema_kind {
             SchemaKind::Type(Type::Object(obj)) => {
-                self.schema_object_to_definition(name, obj, description)
+                self.schema_object_to_definition(name, obj, description, ir_name)
             }
             SchemaKind::Type(Type::String(s)) if !s.enumeration.is_empty() => {
-                Ok(self.schema_enum_to_definition(name, s, description))
+                Ok(self.schema_enum_to_definition(name, s, description, ir_name))
             }
 
             SchemaKind::Type(Type::String(_) | Type::Integer(_))
@@ -141,20 +332,20 @@ impl<'a> Transformer<'a> {
             {
                 let target = self.schema_to_type_ir(name, "Target", schema)?;
                 Ok(TypeDefinitionIr::Newtype(NewtypeIr {
-                    name: name.to_string(),
+                    name: ir_name,
                     target,
                     derives: self.get_newtype_derives(name),
                     description,
                 }))
             }
             SchemaKind::AnyOf { any_of } => {
-                self.schema_any_of_to_definition(name, any_of, description)
+                self.schema_any_of_to_definition(name, any_of, description, ir_name)
             }
             SchemaKind::OneOf { one_of } => {
-                self.schema_any_of_to_definition(name, one_of, description.clone())
+                self.schema_any_of_to_definition(name, one_of, description.clone(), ir_name)
             }
             SchemaKind::AllOf { all_of } => {
-                self.schema_all_of_to_definition(name, all_of, description)
+                self.schema_all_of_to_definition(name, all_of, description, ir_name)
             }
             SchemaKind::Type(Type::Array(arr)) => {
                 let target = if let Some(items) = &arr.items {
@@ -163,22 +354,18 @@ impl<'a> Transformer<'a> {
                     TypeIr::Value
                 };
                 Ok(TypeDefinitionIr::Alias(AliasIr {
-                    name: name.to_string(),
+                    name: ir_name,
                     target: TypeIr::Array(Box::new(target)),
                     description,
                 }))
             }
             SchemaKind::Any(any) if !any.properties.is_empty() => {
-                self.schema_any_to_definition(name, any, description)
+                self.schema_any_to_definition(name, any, description, ir_name)
             }
             _ => {
-                eprintln!(
-                    "WARN: schema '{name}' fell through to alias catch-all, schema_kind={:?}",
-                    schema.schema_kind
-                );
                 let target = self.schema_to_type_ir(name, "Target", schema)?;
                 Ok(TypeDefinitionIr::Alias(AliasIr {
-                    name: name.to_string(),
+                    name: ir_name,
                     target,
                     description,
                 }))
@@ -186,15 +373,12 @@ impl<'a> Transformer<'a> {
         }
     }
 
-    fn is_nullable_ref(s_ref: &ReferenceOr<Box<Schema>>) -> bool {
-        matches!(s_ref, ReferenceOr::Item(s) if s.schema_data.nullable)
-    }
-
     fn schema_any_to_definition(
         &mut self,
         name: &str,
         any: &AnySchema,
         description: Option<String>,
+        ir_name: Name,
     ) -> Result<TypeDefinitionIr, String> {
         let mut fields = Vec::new();
         for (prop_name, prop_ref) in &any.properties {
@@ -205,12 +389,12 @@ impl<'a> Transformer<'a> {
                 prop_name,
                 field_type,
                 required,
-                Self::extract_validation_from_ref(prop_ref),
-                Self::extract_description_from_ref(prop_ref),
+                Self::extract_validation_from_boxed_ref(prop_ref),
+                Self::extract_description_from_boxed_ref(prop_ref),
             ));
         }
         Ok(TypeDefinitionIr::Struct(StructIr {
-            name: name.to_string(),
+            name: ir_name,
             fields,
             derives: self.get_struct_derives(name),
             description,
@@ -222,6 +406,7 @@ impl<'a> Transformer<'a> {
         name: &str,
         obj: &openapiv3::ObjectType,
         description: Option<String>,
+        ir_name: Name,
     ) -> Result<TypeDefinitionIr, String> {
         let mut fields = Vec::new();
         for (prop_name, prop_ref) in &obj.properties {
@@ -232,12 +417,12 @@ impl<'a> Transformer<'a> {
                 prop_name,
                 field_type,
                 required,
-                Self::extract_validation_from_ref(prop_ref),
-                Self::extract_description_from_ref(prop_ref),
+                Self::extract_validation_from_boxed_ref(prop_ref),
+                Self::extract_description_from_boxed_ref(prop_ref),
             ));
         }
         Ok(TypeDefinitionIr::Struct(StructIr {
-            name: name.to_string(),
+            name: ir_name,
             fields,
             derives: self.get_struct_derives(name),
             description,
@@ -249,6 +434,7 @@ impl<'a> Transformer<'a> {
         name: &str,
         s: &openapiv3::StringType,
         description: Option<String>,
+        ir_name: Name,
     ) -> TypeDefinitionIr {
         let mut variants = Vec::new();
         let mut raw_values = Vec::new();
@@ -265,7 +451,7 @@ impl<'a> Transformer<'a> {
         let rename_all = Self::detect_casing(&raw_values);
 
         TypeDefinitionIr::Enum(EnumIr {
-            name: name.to_string(),
+            name: ir_name,
             variants,
             derives: self.get_enum_derives(name),
             rename_all,
@@ -274,52 +460,14 @@ impl<'a> Transformer<'a> {
     }
 
     fn detect_casing(values: &[String]) -> Option<String> {
-        if values.is_empty() {
-            return None;
+        let first = values.first()?;
+        if first.chars().all(|c| c.is_lowercase() || c == '_') {
+            Some("snake_case".to_string())
+        } else if first.chars().all(|c| c.is_lowercase() || c == '-') {
+            Some("kebab-case".to_string())
+        } else {
+            None
         }
-
-        if values
-            .iter()
-            .all(|v| v.chars().all(|c| c.is_uppercase() || c == '_'))
-        {
-            return Some("SCREAMING_SNAKE_CASE".to_string());
-        }
-        if values
-            .iter()
-            .all(|v| v.chars().all(|c| c.is_lowercase() || c == '_'))
-        {
-            return Some("snake_case".to_string());
-        }
-        if values.iter().all(|v| v == &v.to_snake_case()) {
-            return Some("snake_case".to_string());
-        }
-        if values.iter().all(|v| v == &v.to_pascal_case()) {
-            return Some("PascalCase".to_string());
-        }
-        if values.iter().all(|v| v == &v.to_lower_camel_case()) {
-            return Some("camelCase".to_string());
-        }
-        if values.iter().all(|v| v == &v.to_kebab_case()) {
-            return Some("kebab-case".to_string());
-        }
-
-        None
-    }
-
-    fn get_newtype_derives(&self, name: &str) -> Vec<String> {
-        self.merge_derives(
-            name,
-            &[
-                "Debug",
-                "Clone",
-                "Serialize",
-                "Deserialize",
-                "PartialEq",
-                "Default",
-                "derive_more::Display",
-                "derive_more::From",
-            ],
-        )
     }
 
     fn schema_any_of_to_definition(
@@ -327,19 +475,40 @@ impl<'a> Transformer<'a> {
         name: &str,
         any_of: &[ReferenceOr<Schema>],
         description: Option<String>,
+        ir_name: Name,
     ) -> Result<TypeDefinitionIr, String> {
         let mut variants = Vec::new();
         for (i, sub_ref) in any_of.iter().enumerate() {
-            let variant_name = match sub_ref {
+            let mut variant_name = match sub_ref {
                 ReferenceOr::Reference { reference } => {
                     Self::resolve_ref_name(reference)?.to_string()
                 }
-                ReferenceOr::Item(_) => format!("Variant{i}"),
+                ReferenceOr::Item(s) => {
+                    if let SchemaKind::Type(Type::String(st)) = &s.schema_kind
+                        && !st.enumeration.is_empty()
+                    {
+                        let values: Vec<String> =
+                            st.enumeration.iter().flatten().cloned().collect();
+                        Self::find_common_prefix(&values).unwrap_or_else(|| format!("Variant{i}"))
+                    } else if let Some(title) = &s.schema_data.title {
+                        title.clone()
+                    } else {
+                        format!("Variant{i}")
+                    }
+                }
             };
-            variants.push(self.schema_ref_to_type_ir(name, &variant_name, sub_ref)?);
+
+            if variant_name.is_empty() || variant_name.chars().all(|c| !c.is_alphanumeric()) {
+                variant_name = format!("Variant{i}");
+            }
+
+            variants.push(VariantIr {
+                name: variant_name.clone(),
+                type_info: self.schema_ref_to_type_ir(name, &variant_name, sub_ref)?,
+            });
         }
         Ok(TypeDefinitionIr::AnyOf(AnyOfIr {
-            name: name.to_string(),
+            name: ir_name,
             variants,
             derives: self.get_any_of_derives(name),
             description,
@@ -351,6 +520,7 @@ impl<'a> Transformer<'a> {
         name: &str,
         all_of: &[ReferenceOr<Schema>],
         description: Option<String>,
+        ir_name: Name,
     ) -> Result<TypeDefinitionIr, String> {
         let mut fields = Vec::new();
         for sub_ref in all_of {
@@ -380,18 +550,56 @@ impl<'a> Transformer<'a> {
                         prop_name,
                         field_type,
                         required,
-                        Self::extract_validation_from_ref(prop_ref),
-                        Self::extract_description_from_ref(prop_ref),
+                        Self::extract_validation_from_boxed_ref(prop_ref),
+                        Self::extract_description_from_boxed_ref(prop_ref),
                     ));
                 }
             }
         }
         Ok(TypeDefinitionIr::Struct(StructIr {
-            name: name.to_string(),
+            name: ir_name,
             fields,
             derives: self.get_struct_derives(name),
             description,
         }))
+    }
+
+    fn is_generic_name(name: &str) -> bool {
+        let n = name.to_lowercase();
+        matches!(
+            n.as_str(),
+            "status"
+                | "role"
+                | "type"
+                | "mode"
+                | "model"
+                | "input"
+                | "output"
+                | "request"
+                | "response"
+                | "items"
+                | "variant"
+                | "variant0"
+                | "variant1"
+                | "variant2"
+                | "variant3"
+                | "variant4"
+                | "variant5"
+                | "data"
+                | "value"
+                | "error"
+                | "object"
+                | "properties"
+                | "body"
+                | "content"
+                | "query"
+                | "params"
+                | "results"
+                | "choices"
+                | "usage"
+                | "finishreason"
+                | "finish_reason"
+        )
     }
 
     fn schema_ref_to_type_ir(
@@ -406,13 +614,13 @@ impl<'a> Transformer<'a> {
                 Ok(TypeIr::Reference(self.resolve_final_name(ref_name)))
             }
             ReferenceOr::Item(s) => {
-                // Handle enums specially - they should be registered as types
-                if let Some(enum_def) = Self::try_register_enum(&mut *self, parent, field, s_ref) {
+                if let Some(enum_def) = self.try_register_enum(parent, field, s_ref) {
                     return Ok(TypeIr::Enum(enum_def));
                 }
 
                 if Self::is_complex_schema(s) {
-                    let child_name = format!("{parent}{}", to_pascal_case(field));
+                    let candidate = format!("{parent}{}", to_pascal_case(field));
+                    let child_name = self.resolve_final_name(&candidate);
                     self.resolve_and_register_type(&child_name, s_ref)
                 } else {
                     self.schema_to_type_ir(parent, field, s)
@@ -492,14 +700,17 @@ impl<'a> Transformer<'a> {
             ReferenceOr::Reference { .. } => return None,
         };
 
-        // Check if this is an enum schema
         if let SchemaKind::Type(Type::String(st)) = &s.schema_kind
             && !st.enumeration.is_empty()
         {
-            let child_name = format!("{parent}{}", to_pascal_case(field));
-            // Register the enum type
-            let def =
-                self.schema_enum_to_definition(&child_name, st, s.schema_data.description.clone());
+            let candidate = format!("{parent}{}", to_pascal_case(field));
+            let child_name = self.resolve_final_name(&candidate);
+            let def = self.schema_enum_to_definition(
+                &child_name,
+                st,
+                s.schema_data.description.clone(),
+                Name::Generated(child_name.clone()),
+            );
             self.types.insert(child_name.clone(), def);
             self.taken_names.insert(child_name.clone());
             return Some(child_name);
@@ -509,45 +720,64 @@ impl<'a> Transformer<'a> {
 
     fn process_paths(&mut self) -> Result<Vec<OperationIr>, String> {
         let mut operations = Vec::new();
-        for (path, p) in self.openapi.paths.iter() {
-            let pi = match p {
-                ReferenceOr::Item(item) => item,
-                ReferenceOr::Reference { .. } => continue,
-            };
-
-            let methods = [
-                (Method::GET, &pi.get),
-                (Method::POST, &pi.post),
-                (Method::PUT, &pi.put),
-                (Method::DELETE, &pi.delete),
-                (Method::PATCH, &pi.patch),
-            ];
-
-            for (method, op_opt) in methods {
-                if let Some(op) = op_opt {
-                    operations.push(self.process_operation(path, pi, method, op)?);
-                }
+        for (path, item) in self.openapi.paths.iter() {
+            let pi = item
+                .as_item()
+                .ok_or_else(|| format!("Path {path} is a reference, not supported yet"))?;
+            for (method, op) in Self::path_item_to_operations(pi) {
+                operations.push(self.process_operation(path, method, op, pi)?);
             }
         }
         Ok(operations)
     }
 
+    fn path_item_to_operations(pi: &openapiv3::PathItem) -> Vec<(Method, &openapiv3::Operation)> {
+        let mut ops = Vec::new();
+        if let Some(op) = &pi.get {
+            ops.push((Method::GET, op));
+        }
+        if let Some(op) = &pi.post {
+            ops.push((Method::POST, op));
+        }
+        if let Some(op) = &pi.put {
+            ops.push((Method::PUT, op));
+        }
+        if let Some(op) = &pi.delete {
+            ops.push((Method::DELETE, op));
+        }
+        if let Some(op) = &pi.options {
+            ops.push((Method::OPTIONS, op));
+        }
+        if let Some(op) = &pi.head {
+            ops.push((Method::HEAD, op));
+        }
+        if let Some(op) = &pi.patch {
+            ops.push((Method::PATCH, op));
+        }
+        if let Some(op) = &pi.trace {
+            ops.push((Method::TRACE, op));
+        }
+        ops
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn process_operation(
         &mut self,
         path: &str,
-        pi: &openapiv3::PathItem,
         method: Method,
         op: &openapiv3::Operation,
+        pi: &openapiv3::PathItem,
     ) -> Result<OperationIr, String> {
-        let op_id = op.operation_id.as_deref().unwrap_or(path).to_string();
-        let pascal_id = to_pascal_case(&op_id);
+        let operation_id = op.operation_id.clone().unwrap_or_else(|| {
+            format!("{}{}", method.as_str().to_lowercase(), to_pascal_case(path))
+        });
+        let pascal_id = to_pascal_case(&operation_id);
 
-        // 1. Extract Query Params into a Struct
         let query_params: Vec<_> = pi
             .parameters
             .iter()
             .chain(op.parameters.iter())
-            .filter_map(|p_ref| p_ref.as_item())
+            .filter_map(|p| p.as_item())
             .filter(|p| matches!(p, openapiv3::Parameter::Query { .. }))
             .collect();
 
@@ -555,7 +785,6 @@ impl<'a> Transformer<'a> {
             None
         } else {
             let name = match method {
-                Method::GET => format!("{pascal_id}Query"),
                 Method::PUT | Method::PATCH => format!("{pascal_id}Patch"),
                 Method::POST => format!("{pascal_id}Request"),
                 _ => format!("{pascal_id}Params"),
@@ -576,7 +805,7 @@ impl<'a> Transformer<'a> {
             self.types.insert(
                 name.clone(),
                 TypeDefinitionIr::Struct(StructIr {
-                    name: name.clone(),
+                    name: Name::Generated(name.clone()),
                     fields,
                     derives: self.get_struct_derives(&name),
                     description: None,
@@ -585,7 +814,6 @@ impl<'a> Transformer<'a> {
             Some(name)
         };
 
-        // 2. Extract Path/Header Params
         let mut parameters = Vec::new();
         let mut seen_param_names = HashSet::new();
         for p_ref in pi.parameters.iter().chain(op.parameters.iter()) {
@@ -604,11 +832,12 @@ impl<'a> Transformer<'a> {
                 }
                 openapiv3::Parameter::Query { .. } => continue,
             };
-            let rust_name = data.name.to_snake_case();
-            if seen_param_names.contains(&rust_name) {
+
+            if seen_param_names.contains(&data.name) {
                 continue;
             }
-            seen_param_names.insert(rust_name);
+            seen_param_names.insert(data.name.clone());
+
             parameters.push(ParameterIr {
                 name: data.name.clone(),
                 location,
@@ -618,21 +847,52 @@ impl<'a> Transformer<'a> {
             });
         }
 
-        if let Some(q_name) = query_struct_name {
-            parameters.push(ParameterIr {
-                name: "query".to_string(),
-                location: ParameterLocation::Query,
-                required: true,
-                type_info: TypeIr::Reference(q_name),
-                description: None,
-            });
+        let request_body = if let Some(rb_ref) = &op.request_body {
+            if let Some(rb) = rb_ref.as_item() {
+                if let Some(content) = rb.content.get("application/json") {
+                    if let Some(schema) = &content.schema {
+                        Some(self.schema_ref_to_type_ir(&pascal_id, "Body", schema)?)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            query_struct_name.map(TypeIr::Reference)
+        };
+
+        let mut responses = Vec::new();
+        for (code_val, resp_ref) in &op.responses.responses {
+            let code = match code_val {
+                openapiv3::StatusCode::Code(c) => {
+                    StatusCode::from_u16(*c).map_err(|e| e.to_string())?
+                }
+                openapiv3::StatusCode::Range(_) => StatusCode::OK,
+            };
+
+            let type_info = if let Some(resp) = resp_ref.as_item() {
+                if let Some(content) = resp.content.get("application/json") {
+                    if let Some(schema) = &content.schema {
+                        Some(self.schema_ref_to_type_ir(&pascal_id, "Response", schema)?)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            responses.push(ResponseIr { code, type_info });
         }
 
-        let request_body = self.extract_request_body(op, &pascal_id)?;
-        let responses = self.extract_responses(op, &pascal_id)?;
-
         Ok(OperationIr {
-            operation_id: op_id,
+            operation_id,
             method,
             path: path.to_string(),
             parameters,
@@ -642,84 +902,84 @@ impl<'a> Transformer<'a> {
         })
     }
 
-    fn extract_request_body(
-        &mut self,
-        op: &openapiv3::Operation,
-        pascal_id: &str,
-    ) -> Result<Option<TypeIr>, String> {
-        if let Some(rb_ref) = &op.request_body {
-            match rb_ref {
-                ReferenceOr::Item(rb) => {
-                    if let Some(mt) = rb.content.get("application/json") {
-                        if let Some(s_ref) = &mt.schema {
-                            Ok(Some(self.schema_ref_to_type_ir(pascal_id, "Body", s_ref)?))
-                        } else {
-                            Ok(None)
-                        }
-                    } else {
-                        Ok(None)
-                    }
-                }
-                ReferenceOr::Reference { reference } => Ok(Some(TypeIr::Reference(
-                    self.resolve_final_name(Self::resolve_ref_name(reference)?),
-                ))),
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn extract_responses(
-        &mut self,
-        op: &openapiv3::Operation,
-        pascal_id: &str,
-    ) -> Result<Vec<ResponseIr>, String> {
-        let mut responses = Vec::new();
-        for (code_val, resp_ref) in &op.responses.responses {
-            let code_str = code_val.to_string();
-            let Ok(code) = StatusCode::from_str(&code_str) else {
-                continue;
-            };
-            let type_info = match resp_ref {
-                ReferenceOr::Item(r) => {
-                    if let Some(mt) = r.content.get("application/json") {
-                        if let Some(s_ref) = &mt.schema {
-                            Some(self.schema_ref_to_type_ir(pascal_id, "Response", s_ref)?)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-                ReferenceOr::Reference { reference } => Some(TypeIr::Reference(
-                    self.resolve_final_name(Self::resolve_ref_name(reference)?),
-                )),
-            };
-            responses.push(ResponseIr { code, type_info });
-        }
-        Ok(responses)
-    }
-
-    fn resolve_param_type(
-        &mut self,
-        data: &ParameterData,
-        pascal_id: &str,
-    ) -> Result<TypeIr, String> {
+    fn resolve_param_type(&mut self, data: &ParameterData, parent: &str) -> Result<TypeIr, String> {
         match &data.format {
             ParameterSchemaOrContent::Schema(s_ref) => {
-                self.schema_ref_to_type_ir(pascal_id, &data.name, s_ref)
+                self.schema_ref_to_type_ir(parent, &data.name, s_ref)
             }
-            ParameterSchemaOrContent::Content(_) => Ok(TypeIr::Primitive(PrimitiveType::String)),
+            ParameterSchemaOrContent::Content(_) => {
+                Err("Parameter content not supported".to_string())
+            }
         }
     }
 
-    fn resolve_final_name(&self, name: &str) -> String {
-        self.config
-            .rename
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| name.to_string())
+    fn extract_validation(data: &ParameterData) -> Vec<ValidationIr> {
+        match &data.format {
+            ParameterSchemaOrContent::Schema(s_ref) => Self::extract_validation_from_ref(s_ref),
+            ParameterSchemaOrContent::Content(_) => Vec::new(),
+        }
+    }
+
+    fn extract_validation_from_ref(s_ref: &ReferenceOr<Schema>) -> Vec<ValidationIr> {
+        let mut v = Vec::new();
+        if let ReferenceOr::Item(s) = s_ref {
+            match &s.schema_kind {
+                SchemaKind::Type(Type::String(st))
+                    if st.min_length.is_some() || st.max_length.is_some() =>
+                {
+                    v.push(ValidationIr::Length {
+                        min: st.min_length.map(|l| l as u64),
+                        max: st.max_length.map(|l| l as u64),
+                    });
+                }
+                SchemaKind::Type(Type::Integer(st))
+                    if st.minimum.is_some() || st.maximum.is_some() =>
+                {
+                    v.push(ValidationIr::IntRange {
+                        min: st.minimum,
+                        max: st.maximum,
+                    });
+                }
+                SchemaKind::Type(Type::Number(st))
+                    if st.minimum.is_some() || st.maximum.is_some() =>
+                {
+                    v.push(ValidationIr::FloatRange {
+                        min: st.minimum,
+                        max: st.maximum,
+                    });
+                }
+                _ => {}
+            }
+        }
+        v
+    }
+
+    fn extract_validation_from_boxed_ref(s_ref: &ReferenceOr<Box<Schema>>) -> Vec<ValidationIr> {
+        match s_ref {
+            ReferenceOr::Item(s) => {
+                Self::extract_validation_from_ref(&ReferenceOr::Item(*s.clone()))
+            }
+            ReferenceOr::Reference { reference } => {
+                Self::extract_validation_from_ref(&ReferenceOr::Reference {
+                    reference: reference.clone(),
+                })
+            }
+        }
+    }
+
+    fn extract_description_from_boxed_ref(s_ref: &ReferenceOr<Box<Schema>>) -> Option<String> {
+        match s_ref {
+            ReferenceOr::Item(s) => s.schema_data.description.clone(),
+            ReferenceOr::Reference { .. } => None,
+        }
+    }
+
+    fn is_nullable_ref(s_ref: &ReferenceOr<Box<Schema>>) -> bool {
+        if let ReferenceOr::Item(s) = s_ref {
+            s.schema_data.nullable
+        } else {
+            false
+        }
     }
 
     fn get_struct_derives(&self, name: &str) -> Vec<String> {
@@ -755,64 +1015,48 @@ impl<'a> Transformer<'a> {
         )
     }
 
-    fn get_any_of_derives(&self, name: &str) -> Vec<String> {
+    fn get_newtype_derives(&self, name: &str) -> Vec<String> {
         self.merge_derives(
             name,
-            &["Debug", "Clone", "Serialize", "Deserialize", "PartialEq"],
+            &[
+                "Debug",
+                "Clone",
+                "Serialize",
+                "Deserialize",
+                "PartialEq",
+                "derive_more::Display",
+                "derive_more::From",
+            ],
         )
     }
 
-    fn extract_description_from_ref(s_ref: &ReferenceOr<Box<Schema>>) -> Option<String> {
-        if let ReferenceOr::Item(s) = s_ref {
-            s.schema_data.description.clone()
-        } else {
-            None
-        }
+    fn get_any_of_derives(&self, name: &str) -> Vec<String> {
+        self.merge_derives(
+            name,
+            &[
+                "Debug",
+                "Clone",
+                "Serialize",
+                "Deserialize",
+                "PartialEq",
+                "Default",
+                "derive_more::From",
+            ],
+        )
     }
 
-    fn extract_validation_from_ref(s_ref: &ReferenceOr<Box<Schema>>) -> Vec<ValidationIr> {
-        if let ReferenceOr::Item(s) = s_ref {
-            Self::extract_validation_from_schema(s)
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn extract_validation(data: &ParameterData) -> Vec<ValidationIr> {
-        match &data.format {
-            ParameterSchemaOrContent::Schema(ReferenceOr::Item(s)) => {
-                Self::extract_validation_from_schema(s)
+    fn find_common_prefix(values: &[String]) -> Option<String> {
+        let mut prefix = values.first()?.clone();
+        for v in values.get(1..).unwrap_or_default() {
+            while !v.starts_with(&prefix) && !prefix.is_empty() {
+                prefix.pop();
             }
-            _ => Vec::new(),
         }
-    }
 
-    fn extract_validation_from_schema(schema: &Schema) -> Vec<ValidationIr> {
-        let mut v = Vec::new();
-        if let SchemaKind::Type(Type::String(s)) = &schema.schema_kind
-            && (s.min_length.is_some() || s.max_length.is_some())
-        {
-            v.push(ValidationIr::Length {
-                min: s.min_length.map(|m| m as u64),
-                max: s.max_length.map(|m| m as u64),
-            });
+        while prefix.ends_with('-') || prefix.ends_with('_') || prefix.ends_with('.') {
+            prefix.pop();
         }
-        if let SchemaKind::Type(Type::Integer(i)) = &schema.schema_kind
-            && (i.minimum.is_some() || i.maximum.is_some())
-        {
-            v.push(ValidationIr::IntRange {
-                min: i.minimum,
-                max: i.maximum,
-            });
-        }
-        if let SchemaKind::Type(Type::Number(n)) = &schema.schema_kind
-            && (n.minimum.is_some() || n.maximum.is_some())
-        {
-            v.push(ValidationIr::FloatRange {
-                min: n.minimum,
-                max: n.maximum,
-            });
-        }
-        v
+
+        if prefix.len() > 3 { Some(prefix) } else { None }
     }
 }

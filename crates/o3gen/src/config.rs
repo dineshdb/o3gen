@@ -10,4 +10,10 @@ pub struct Config {
     pub derive_extra: HashMap<String, Vec<String>>,
     #[serde(default)]
     pub api_name: Option<String>,
+    #[serde(default = "default_deny_unknown_fields")]
+    pub deny_unknown_fields: bool,
+}
+
+fn default_deny_unknown_fields() -> bool {
+    true
 }

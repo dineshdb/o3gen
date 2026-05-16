@@ -1,6 +1,6 @@
+use crate::types::CreateModerationRequestModel;
 use crate::{
-    CreateChatCompletionRequestModel, CreateEmbeddingRequestModel, CreateModerationRequestInput,
-    CreateModerationRequestModel, OpenAIApi, OpenAIApiClient,
+    CreateChatCompletionRequestModel, CreateEmbeddingRequestModel, OpenAIApi, OpenAIApiClient,
 };
 use mockito::ServerGuard;
 use serde::Serialize;
@@ -103,15 +103,15 @@ async fn test_create_chat_completion() {
     );
 
     let body = crate::types::CreateChatCompletionRequest::builder()
-        .model(CreateChatCompletionRequestModel::Variant0(
+        .model(CreateChatCompletionRequestModel::String(
             "gpt-3.5-turbo".to_string(),
         ))
         .messages(vec![
-            crate::types::ChatCompletionRequestMessage::ChatCompletionRequestUserMessage(
+            crate::types::ChatCompletionRequestMessage::UserMessage(
                 crate::types::ChatCompletionRequestUserMessage::builder()
                     .role(crate::types::ChatCompletionRequestUserMessageRole::User)
                     .content(
-                        crate::types::ChatCompletionRequestUserMessageContent::Variant0(
+                        crate::types::ChatCompletionRequestUserMessageContent::String(
                             "Hello".to_string(),
                         ),
                     )
@@ -142,7 +142,7 @@ async fn test_create_chat_completion() {
 async fn test_create_moderation() {
     let mut server = mockito::Server::new_async().await;
     let client = OpenAIApiClient::new(server.url());
-    let no_categories = crate::types::CreateModerationResponseResultsCategories {
+    let no_categories = crate::types::Categories {
         hate: false,
         hate_threatening: false,
         harassment: false,
@@ -155,7 +155,7 @@ async fn test_create_moderation() {
         violence: false,
         violence_graphic: false,
     };
-    let zero_scores = crate::types::CreateModerationResponseResultsCategoryScores {
+    let zero_scores = crate::types::CategoryScores {
         hate: 0.0,
         hate_threatening: 0.0,
         harassment: 0.0,
@@ -184,11 +184,11 @@ async fn test_create_moderation() {
     );
 
     let body = crate::types::CreateModerationRequest::builder()
-        .input(CreateModerationRequestInput::Variant0(
+        .input(crate::types::CreateModerationRequestInput::String(
             "I want to kill them.".to_string(),
         ))
-        .model(CreateModerationRequestModel::Variant1(
-            crate::types::CreateModerationRequestModelVariant1::TextModerationStable,
+        .model(CreateModerationRequestModel::TextModeration(
+            crate::types::TextModeration::TextModerationStable,
         ))
         .build()
         .unwrap();
@@ -229,10 +229,10 @@ async fn test_create_embedding() {
     );
 
     let body = crate::types::CreateEmbeddingRequest::builder()
-        .input(crate::types::CreateEmbeddingRequestInput::Variant0(
+        .input(crate::types::CreateEmbeddingRequestInput::String(
             "Hello world".to_string(),
         ))
-        .model(CreateEmbeddingRequestModel::Variant0(
+        .model(CreateEmbeddingRequestModel::String(
             "text-embedding-ada-002".to_string(),
         ))
         .build()
@@ -263,7 +263,9 @@ async fn test_http_error_returns_status() {
 
     let err = OpenAIApi::list_models(&client).await.unwrap_err();
     match err {
-        crate::ApiError::Status(code) => assert_eq!(code, reqwest::StatusCode::UNAUTHORIZED),
+        crate::ApiError::Status { status, .. } => {
+            assert_eq!(status, reqwest::StatusCode::UNAUTHORIZED)
+        }
         other => panic!("expected Status error, got: {other:?}"),
     }
 }
@@ -281,7 +283,9 @@ async fn test_not_found_error() {
 
     let err = OpenAIApi::list_models(&client).await.unwrap_err();
     match err {
-        crate::ApiError::Status(code) => assert_eq!(code, reqwest::StatusCode::NOT_FOUND),
+        crate::ApiError::Status { status, .. } => {
+            assert_eq!(status, reqwest::StatusCode::NOT_FOUND)
+        }
         other => panic!("expected Status error, got: {other:?}"),
     }
 }

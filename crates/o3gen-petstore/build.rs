@@ -9,6 +9,7 @@ fn main() {
         .expect("Failed to generate types.rs");
 
     Generator::builder("fixtures/composite.json")
+        .deny_unknown_fields(true)
         .write_to_out_dir("composite.rs")
         .expect("Failed to generate composite.rs");
 

@@ -5,7 +5,7 @@ fn test_compare_pets() {
     let pet1 = types::Pet {
         id: "123".to_string(),
         name: "doggie".to_string(),
-        species: types::PetSpecies::Dog,
+        species: types::Species::Dog,
         status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),
@@ -18,7 +18,7 @@ fn test_compare_pets() {
     let pet2 = types::Pet {
         id: "123".to_string(),
         name: "doggie".to_string(),
-        species: types::PetSpecies::Dog,
+        species: types::Species::Dog,
         status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),
@@ -36,7 +36,7 @@ fn test_compare_different_pets() {
     let pet1 = types::Pet {
         id: "1".to_string(),
         name: "doggie".to_string(),
-        species: types::PetSpecies::Dog,
+        species: types::Species::Dog,
         status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),
@@ -49,7 +49,7 @@ fn test_compare_different_pets() {
     let pet2 = types::Pet {
         id: "2".to_string(),
         name: "cat".to_string(),
-        species: types::PetSpecies::Cat,
+        species: types::Species::Cat,
         status: types::PetStatus::Available,
         price: "50.00".to_string(),
         currency: "USD".to_string(),
@@ -67,7 +67,7 @@ fn test_cloning_pet() {
     let original = types::Pet {
         id: "1".to_string(),
         name: "doggie".to_string(),
-        species: types::PetSpecies::Dog,
+        species: types::Species::Dog,
         status: types::PetStatus::Available,
         price: "100.00".to_string(),
         currency: "USD".to_string(),

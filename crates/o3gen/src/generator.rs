@@ -58,6 +58,12 @@ impl Generator {
         self
     }
 
+    #[must_use]
+    pub fn deny_unknown_fields(mut self, deny: bool) -> Self {
+        self.config.deny_unknown_fields = deny;
+        self
+    }
+
     /// Generates the Rust code for the API.
     ///
     /// # Errors
@@ -87,15 +93,15 @@ impl Generator {
             .unwrap_or_else(|| crate::helpers::to_pascal_case(&openapi.info.title));
 
         // Simple Emit: ApiIr -> Tokens
-        Self::emit(ir, &api_name)
+        self.emit(ir, &api_name)
     }
 
-    fn emit(ir: ApiIr, api_name: &str) -> Result<String, String> {
+    fn emit(&self, ir: ApiIr, api_name: &str) -> Result<String, String> {
         let mut types_tokens = TokenStream::new();
 
         // Emit types
         for (_, def) in &ir.types {
-            types_tokens.extend(Self::emit_type_definition(def));
+            types_tokens.extend(self.emit_type_definition(def));
         }
 
         let mut output_tokens = TokenStream::new();
@@ -106,8 +112,8 @@ impl Generator {
             pub enum ApiError {
                 #[error("Request error: {0}")]
                 Reqwest(#[from] reqwest::Error),
-                #[error("Status error: {0}")]
-                Status(reqwest::StatusCode),
+                #[error("Status error: {status} - {body}")]
+                Status { status: reqwest::StatusCode, body: String },
                 #[error("Serialization error: {0}")]
                 Serde(#[from] serde_json::Error),
                 #[error("Validation error: {0}")]
@@ -211,9 +217,9 @@ impl Generator {
         Ok(prettyplease::unparse(&file))
     }
 
-    fn emit_type_definition(def: &TypeDefinitionIr) -> TokenStream {
+    fn emit_type_definition(&self, def: &TypeDefinitionIr) -> TokenStream {
         match def {
-            TypeDefinitionIr::Struct(s) => Self::emit_struct_definition(s),
+            TypeDefinitionIr::Struct(s) => self.emit_struct_definition(s),
             TypeDefinitionIr::Enum(e) => Self::emit_enum_definition(e),
             TypeDefinitionIr::Alias(a) => Self::emit_alias_definition(a),
             TypeDefinitionIr::Newtype(n) => Self::emit_newtype_definition(n),
@@ -233,9 +239,9 @@ impl Generator {
         }
     }
 
-    fn emit_struct_definition(s: &crate::ir::StructIr) -> TokenStream {
-        let name = to_ident(&s.name);
-        let builder_name = to_ident(&format!("{0}Builder", s.name));
+    fn emit_struct_definition(&self, s: &crate::ir::StructIr) -> TokenStream {
+        let name = to_ident(s.name.as_str());
+        let builder_name = to_ident(&format!("{0}Builder", s.name.as_str()));
         let derives = Self::emit_derives(&s.derives);
         let doc_attr = Self::emit_doc(s.description.as_deref());
         let fields = s.fields.iter().map(|f| {
@@ -252,18 +258,31 @@ impl Generator {
             } else {
                 quote! { #[builder(default)] }
             };
+            let skip_if_none = if f.required {
+                quote! {}
+            } else {
+                quote! { #[serde(skip_serializing_if = "Option::is_none")] }
+            };
             quote! {
                 #f_doc_attr
                 #serde_attr
+                #skip_if_none
                 #validate_attr
                 #builder_attr
                 pub #f_name: #f_type,
             }
         });
+
+        let deny_unknown = if self.config.deny_unknown_fields {
+            quote! { #[serde(deny_unknown_fields)] }
+        } else {
+            quote! {}
+        };
+
         quote! {
             #doc_attr
             #derives
-            #[serde(deny_unknown_fields)]
+            #deny_unknown
             #[builder(setter(into, strip_option), build_fn(name = "build_inner", vis = "pub(crate)"))]
             pub struct #name {
                 #(#fields)*
@@ -285,10 +304,6 @@ impl Generator {
                                     "length" => {
                                         let min = err.params.get("min").and_then(|v| v.as_u64()).unwrap_or(0);
                                         let max = err.params.get("max").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
-                                        // validator doesn't tell us if it was too short or too long
-                                        // We can't easily check the value here without more complexity,
-                                        // so we'll use a heuristic or just one of them.
-                                        // For now, let's use LengthTooShort as a generic length error or try to be smart.
                                         return ApiError::Validation(ValidationError::LengthTooShort {
                                             field: field.to_string(),
                                             min,
@@ -324,7 +339,7 @@ impl Generator {
     }
 
     fn emit_enum_definition(e: &crate::ir::EnumIr) -> TokenStream {
-        let name = to_ident(&e.name);
+        let name = to_ident(e.name.as_str());
         let derives = Self::emit_derives(&e.derives);
         let doc_attr = Self::emit_doc(e.description.as_deref());
         let rename_all_attr = e
@@ -366,7 +381,7 @@ impl Generator {
     }
 
     fn emit_alias_definition(a: &crate::ir::AliasIr) -> TokenStream {
-        let name = to_ident(&a.name);
+        let name = to_ident(a.name.as_str());
         let target = Self::emit_type_info(&a.target, true);
         let doc_attr = Self::emit_doc(a.description.as_deref());
         quote! {
@@ -376,7 +391,7 @@ impl Generator {
     }
 
     fn emit_newtype_definition(n: &crate::ir::NewtypeIr) -> TokenStream {
-        let name = to_ident(&n.name);
+        let name = to_ident(n.name.as_str());
         let derives = Self::emit_derives(&n.derives);
         let target = Self::emit_type_info(&n.target, true);
         let doc_attr = Self::emit_doc(n.description.as_deref());
@@ -388,18 +403,15 @@ impl Generator {
     }
 
     fn emit_any_of_definition(a: &crate::ir::AnyOfIr) -> TokenStream {
-        let name = to_ident(&a.name);
+        let name = to_ident(a.name.as_str());
         let mut derives_list = a.derives.clone();
         derives_list.retain(|d| d != "Default");
         let derives = Self::emit_derives(&derives_list);
         let doc_attr = Self::emit_doc(a.description.as_deref());
 
-        let variants = a.variants.iter().enumerate().map(|(i, v)| {
-            let v_name = match v {
-                TypeIr::Reference(r) => to_ident(r),
-                _ => to_ident(&format!("Variant{i}")),
-            };
-            let v_type = Self::emit_type_info(v, true);
+        let variants = a.variants.iter().map(|v| {
+            let v_name = to_ident(&v.name);
+            let v_type = Self::emit_type_info(&v.type_info, true);
             let v_doc_attr = Self::emit_doc(None); // anyof variants don't have distinct docs easily
             quote! {
                 #v_doc_attr
@@ -408,12 +420,13 @@ impl Generator {
             }
         });
 
-        let first_variant_type_ir = a.variants.first().unwrap_or(&TypeIr::Value);
-        let first_variant_name = match first_variant_type_ir {
-            TypeIr::Reference(r) => to_ident(r),
-            _ => to_ident("Variant0"),
-        };
-        let first_variant_type = Self::emit_type_info(first_variant_type_ir, true);
+        let first_variant = a.variants.first();
+        let first_variant_name =
+            first_variant.map_or_else(|| to_ident("Variant0"), |v| to_ident(&v.name));
+        let first_variant_type = first_variant.map_or_else(
+            || quote! { serde_json::Value },
+            |v| Self::emit_type_info(&v.type_info, true),
+        );
 
         quote! {
             #doc_attr

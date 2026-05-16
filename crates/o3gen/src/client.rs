@@ -247,7 +247,9 @@ pub fn generate_client_impl(
 
                 let resp = req.send().await?;
                 if !resp.status().is_success() {
-                    return Err(ApiError::Status(resp.status()));
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(ApiError::Status { status, body });
                 }
 
                 Ok(resp.json::<T>().await?)
