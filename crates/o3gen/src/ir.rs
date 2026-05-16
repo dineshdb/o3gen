@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use heck::ToSnakeCase;
 use http::{Method, StatusCode};
 use indexmap::IndexMap;
@@ -49,6 +51,16 @@ impl TypeDefinitionIr {
             Self::Newtype(n) => n.name.is_generated(),
         }
     }
+
+    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+        match self {
+            Self::Struct(s) => s.update_references(renames),
+            Self::Enum(_) => {}
+            Self::Alias(a) => a.update_references(renames),
+            Self::AnyOf(a) => a.update_references(renames),
+            Self::Newtype(n) => n.update_references(renames),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +97,14 @@ pub struct StructIr {
     pub description: Option<String>,
 }
 
+impl StructIr {
+    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+        for field in &mut self.fields {
+            field.type_info.update_reference(renames);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EnumIr {
     pub name: Name,
@@ -100,6 +120,12 @@ pub struct NewtypeIr {
     pub target: TypeIr,
     pub derives: Vec<String>,
     pub description: Option<String>,
+}
+
+impl NewtypeIr {
+    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+        self.target.update_reference(renames);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -154,12 +180,26 @@ pub struct AliasIr {
     pub description: Option<String>,
 }
 
+impl AliasIr {
+    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+        self.target.update_reference(renames);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AnyOfIr {
     pub name: Name,
     pub variants: Vec<VariantIr>,
     pub derives: Vec<String>,
     pub description: Option<String>,
+}
+
+impl AnyOfIr {
+    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+        for variant in &mut self.variants {
+            variant.type_info.update_reference(renames);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -176,6 +216,20 @@ pub enum TypeIr {
     Map(Box<TypeIr>),
     Value,        // serde_json::Value
     Enum(String), // Reference to an enum type definition
+}
+
+impl TypeIr {
+    pub fn update_reference(&mut self, renames: &HashMap<String, String>) {
+        match self {
+            Self::Reference(name) | Self::Enum(name) => {
+                if let Some(new_name) = renames.get(name) {
+                    *name = new_name.clone();
+                }
+            }
+            Self::Array(inner) | Self::Map(inner) => inner.update_reference(renames),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -4,6 +4,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Ident;
 
+use crate::emit;
 use crate::helpers::to_ident;
 
 #[derive(Debug, Clone)]
@@ -65,20 +66,6 @@ fn response_type_tokens(response_type: Option<&String>) -> TokenStream {
     }
 }
 
-/// Generate client trait methods for API operations
-#[must_use]
-fn emit_doc(desc: Option<&str>) -> TokenStream {
-    if let Some(d) = desc {
-        let d = d
-            .trim()
-            .replace("```\n", "```text\n")
-            .replace("```\r\n", "```text\n");
-        quote! { #[doc = #d] }
-    } else {
-        TokenStream::new()
-    }
-}
-
 #[must_use]
 pub fn generate_client_traits(type_ident: &Ident, operations: &[OperationDetails]) -> TokenStream {
     let type_name = to_ident(type_ident.to_string().as_str());
@@ -88,7 +75,7 @@ pub fn generate_client_traits(type_ident: &Ident, operations: &[OperationDetails
         let final_method_name = compute_method_name(&op.operation_id, type_ident);
         let method_ident = to_ident(&final_method_name);
         let response_type = response_type_tokens(op.response_type.as_ref());
-        let doc_attr = emit_doc(op.description.as_deref());
+        let doc_attr = emit::emit_doc(op.description.as_deref());
 
         let mut params = TokenStream::new();
         params.extend(quote! { &self });

@@ -128,18 +128,18 @@ impl<'a> Transformer<'a> {
 
         // Update all references in the IR to the new type names
         for def in self.types.values_mut() {
-            Self::update_type_references(def, &type_renames);
+            def.update_references(&type_renames);
         }
         for op in &mut self.operations {
             if let Some(rb) = &mut op.request_body {
-                Self::update_type_ir_reference(rb, &type_renames);
+                rb.update_reference(&type_renames);
             }
             for param in &mut op.parameters {
-                Self::update_type_ir_reference(&mut param.type_info, &type_renames);
+                param.type_info.update_reference(&type_renames);
             }
             for resp in &mut op.responses {
                 if let Some(ti) = &mut resp.type_info {
-                    Self::update_type_ir_reference(ti, &type_renames);
+                    ti.update_reference(&type_renames);
                 }
             }
         }
@@ -195,42 +195,6 @@ impl<'a> Transformer<'a> {
                     seen_names.insert(final_name);
                 }
             }
-        }
-    }
-
-    fn update_type_references(def: &mut TypeDefinitionIr, renames: &HashMap<String, String>) {
-        match def {
-            TypeDefinitionIr::Struct(s) => {
-                for field in &mut s.fields {
-                    Self::update_type_ir_reference(&mut field.type_info, renames);
-                }
-            }
-            TypeDefinitionIr::Enum(_) => {}
-            TypeDefinitionIr::Alias(a) => {
-                Self::update_type_ir_reference(&mut a.target, renames);
-            }
-            TypeDefinitionIr::AnyOf(a) => {
-                for variant in &mut a.variants {
-                    Self::update_type_ir_reference(&mut variant.type_info, renames);
-                }
-            }
-            TypeDefinitionIr::Newtype(n) => {
-                Self::update_type_ir_reference(&mut n.target, renames);
-            }
-        }
-    }
-
-    fn update_type_ir_reference(type_ir: &mut TypeIr, renames: &HashMap<String, String>) {
-        match type_ir {
-            TypeIr::Reference(name) | TypeIr::Enum(name) => {
-                if let Some(new_name) = renames.get(name) {
-                    *name = new_name.clone();
-                }
-            }
-            TypeIr::Array(inner) | TypeIr::Map(inner) => {
-                Self::update_type_ir_reference(inner, renames);
-            }
-            _ => {}
         }
     }
 

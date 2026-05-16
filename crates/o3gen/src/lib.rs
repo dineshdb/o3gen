@@ -1,5 +1,6 @@
 pub mod client;
 pub mod config;
+pub mod emit;
 pub mod generator;
 pub mod helpers;
 pub mod ir;

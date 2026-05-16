@@ -1,15 +1,16 @@
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::quote;
 use std::fs;
 use std::path::{Path, PathBuf};
-use syn::{File, Ident, parse2};
+use syn::{File, parse2};
 
 use crate::client::{
     OperationDetails, ParameterDetails, generate_client_impl, generate_client_traits,
 };
 use crate::config::Config;
+use crate::emit::EmitContext;
 use crate::helpers::to_ident;
-use crate::ir::{ApiIr, PrimitiveType, TypeDefinitionIr, TypeIr, ValidationIr};
+use crate::ir::{ApiIr, TypeDefinitionIr, TypeIr};
 use crate::transformer::Transformer;
 
 #[derive(Debug)]
@@ -82,26 +83,25 @@ impl Generator {
         let openapi: openapiv3::OpenAPI = serde_json::from_str(&spec_str)
             .map_err(|e| format!("Failed to parse OpenAPI JSON: {e}"))?;
 
-        // Heavy lifting: OpenAPI -> ApiIr
         let ir = Transformer::transform(&openapi, &self.config)?;
 
-        // Resolve API name from config or spec title
         let api_name = self
             .config
             .api_name
             .clone()
             .unwrap_or_else(|| crate::helpers::to_pascal_case(&openapi.info.title));
 
-        // Simple Emit: ApiIr -> Tokens
         self.emit(ir, &api_name)
     }
 
     fn emit(&self, ir: ApiIr, api_name: &str) -> Result<String, String> {
-        let mut types_tokens = TokenStream::new();
+        let ctx = EmitContext {
+            deny_unknown_fields: self.config.deny_unknown_fields,
+        };
 
-        // Emit types
+        let mut types_tokens = TokenStream::new();
         for (_, def) in &ir.types {
-            types_tokens.extend(self.emit_type_definition(def));
+            types_tokens.extend(def.emit(ctx));
         }
 
         let mut output_tokens = TokenStream::new();
@@ -138,7 +138,6 @@ impl Generator {
 
             pub type Result<T> = std::result::Result<T, ApiError>;
 
-            // prevent clippy from running on generated code
             #[allow(
                 nonstandard_style,
                 unused,
@@ -161,12 +160,11 @@ impl Generator {
             pub use types::*;
         });
 
-        // Emit Client
         let mut operations_details = Vec::new();
         for op in ir.operations {
             let response_type = op.responses.iter().find_map(|r| {
                 if r.code.is_success() {
-                    r.type_info.as_ref().map(Self::emit_type_ref)
+                    r.type_info.as_ref().map(TypeIr::to_type_string)
                 } else {
                     None
                 }
@@ -177,7 +175,7 @@ impl Generator {
                 .iter()
                 .map(|p| ParameterDetails {
                     name: p.name.clone(),
-                    rust_type: Self::emit_type_ref(&p.type_info),
+                    rust_type: p.type_info.to_type_string(),
                     description: p.description.clone(),
                 })
                 .collect();
@@ -187,7 +185,7 @@ impl Generator {
                 http_method: op.method,
                 response_type,
                 parameters,
-                request_body_type: op.request_body.as_ref().map(Self::emit_type_ref),
+                request_body_type: op.request_body.as_ref().map(TypeIr::to_type_string),
                 path: op.path,
                 description: op.description.clone(),
             });
@@ -199,374 +197,18 @@ impl Generator {
             let client_name = format!("{api_name}Client");
             let client_ident = to_ident(&client_name);
 
-            let trait_tokens = generate_client_traits(&trait_ident, &operations_details);
-            output_tokens.extend(quote! {
-                #trait_tokens
-            });
-
-            let impl_tokens =
-                generate_client_impl(&trait_ident, &client_ident, &operations_details);
-            output_tokens.extend(quote! {
-                #impl_tokens
-            });
+            output_tokens.extend(generate_client_traits(&trait_ident, &operations_details));
+            output_tokens.extend(generate_client_impl(
+                &trait_ident,
+                &client_ident,
+                &operations_details,
+            ));
         }
 
         let file = parse2::<File>(output_tokens)
             .map_err(|e| format!("Failed to parse generated tokens: {e}"))?;
 
         Ok(prettyplease::unparse(&file))
-    }
-
-    fn emit_type_definition(&self, def: &TypeDefinitionIr) -> TokenStream {
-        match def {
-            TypeDefinitionIr::Struct(s) => self.emit_struct_definition(s),
-            TypeDefinitionIr::Enum(e) => Self::emit_enum_definition(e),
-            TypeDefinitionIr::Alias(a) => Self::emit_alias_definition(a),
-            TypeDefinitionIr::Newtype(n) => Self::emit_newtype_definition(n),
-            TypeDefinitionIr::AnyOf(a) => Self::emit_any_of_definition(a),
-        }
-    }
-
-    fn emit_doc(desc: Option<&str>) -> TokenStream {
-        if let Some(d) = desc {
-            let d = d
-                .trim()
-                .replace("```\n", "```text\n")
-                .replace("```\r\n", "```text\n");
-            quote! { #[doc = #d] }
-        } else {
-            TokenStream::new()
-        }
-    }
-
-    fn emit_struct_definition(&self, s: &crate::ir::StructIr) -> TokenStream {
-        let name = to_ident(s.name.as_str());
-        let builder_name = to_ident(&format!("{0}Builder", s.name.as_str()));
-        let derives = Self::emit_derives(&s.derives);
-        let doc_attr = Self::emit_doc(s.description.as_deref());
-        let fields = s.fields.iter().map(|f| {
-            let f_name = to_ident(&f.rust_name);
-            let f_type = Self::emit_type_info(&f.type_info, f.required);
-            let f_doc_attr = Self::emit_doc(f.description.as_deref());
-            let serde_attr = f
-                .serde_rename
-                .as_ref()
-                .map(|r| quote! { #[serde(rename = #r)] });
-            let validate_attr = Self::emit_validation(&f.validation, &f.type_info);
-            let builder_attr = if f.required {
-                TokenStream::new()
-            } else {
-                quote! { #[builder(default)] }
-            };
-            let skip_if_none = if f.required {
-                quote! {}
-            } else {
-                quote! { #[serde(skip_serializing_if = "Option::is_none")] }
-            };
-            quote! {
-                #f_doc_attr
-                #serde_attr
-                #skip_if_none
-                #validate_attr
-                #builder_attr
-                pub #f_name: #f_type,
-            }
-        });
-
-        let deny_unknown = if self.config.deny_unknown_fields {
-            quote! { #[serde(deny_unknown_fields)] }
-        } else {
-            quote! {}
-        };
-
-        quote! {
-            #doc_attr
-            #derives
-            #deny_unknown
-            #[builder(setter(into, strip_option), build_fn(name = "build_inner", vis = "pub(crate)"))]
-            pub struct #name {
-                #(#fields)*
-            }
-
-            impl #name {
-                pub fn builder() -> #builder_name {
-                    #builder_name::default()
-                }
-            }
-
-            impl #builder_name {
-                pub fn build(&self) -> Result<#name> {
-                    let obj = self.build_inner().map_err(|e| ApiError::Builder(e.to_string()))?;
-                    obj.validate().map_err(|e| {
-                        if let Some((field, field_errors)) = e.field_errors().into_iter().next() {
-                            if let Some(err) = field_errors.iter().next() {
-                                match err.code.as_ref() {
-                                    "length" => {
-                                        let min = err.params.get("min").and_then(|v| v.as_u64()).unwrap_or(0);
-                                        let max = err.params.get("max").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
-                                        return ApiError::Validation(ValidationError::LengthTooShort {
-                                            field: field.to_string(),
-                                            min,
-                                            max,
-                                        });
-                                    }
-                                    "range" => {
-                                        let min = err.params.get("min").and_then(|v| v.as_f64()).unwrap_or(f64::MIN);
-                                        let max = err.params.get("max").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
-                                        return ApiError::Validation(ValidationError::RangeTooSmall {
-                                            field: field.to_string(),
-                                            min,
-                                            max,
-                                        });
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            return ApiError::Validation(ValidationError::Invalid {
-                                field: field.to_string(),
-                                message: e.to_string(),
-                            });
-                        }
-                        ApiError::Validation(ValidationError::Invalid {
-                            field: "unknown".to_string(),
-                            message: e.to_string(),
-                        })
-                    })?;
-                    Ok(obj)
-                }
-            }
-        }
-    }
-
-    fn emit_enum_definition(e: &crate::ir::EnumIr) -> TokenStream {
-        let name = to_ident(e.name.as_str());
-        let derives = Self::emit_derives(&e.derives);
-        let doc_attr = Self::emit_doc(e.description.as_deref());
-        let rename_all_attr = e
-            .rename_all
-            .as_ref()
-            .map(|r| quote! { #[serde(rename_all = #r)] });
-
-        let variants = e.variants.iter().enumerate().map(|(i, v)| {
-            let v_name = to_ident(&v.rust_name);
-            let value = &v.value;
-            let v_doc_attr = Self::emit_doc(v.description.as_deref());
-            let default_attr = if i == 0 {
-                quote! { #[default] }
-            } else {
-                TokenStream::new()
-            };
-
-            let rename_attr = if e.rename_all.is_some() {
-                TokenStream::new()
-            } else {
-                quote! { #[serde(rename = #value)] }
-            };
-
-            quote! {
-                #v_doc_attr
-                #default_attr
-                #rename_attr
-                #v_name,
-            }
-        });
-        quote! {
-            #doc_attr
-            #derives
-            #rename_all_attr
-            pub enum #name {
-                #(#variants)*
-            }
-        }
-    }
-
-    fn emit_alias_definition(a: &crate::ir::AliasIr) -> TokenStream {
-        let name = to_ident(a.name.as_str());
-        let target = Self::emit_type_info(&a.target, true);
-        let doc_attr = Self::emit_doc(a.description.as_deref());
-        quote! {
-            #doc_attr
-            pub type #name = #target;
-        }
-    }
-
-    fn emit_newtype_definition(n: &crate::ir::NewtypeIr) -> TokenStream {
-        let name = to_ident(n.name.as_str());
-        let derives = Self::emit_derives(&n.derives);
-        let target = Self::emit_type_info(&n.target, true);
-        let doc_attr = Self::emit_doc(n.description.as_deref());
-        quote! {
-            #doc_attr
-            #derives
-            pub struct #name(pub #target);
-        }
-    }
-
-    fn emit_any_of_definition(a: &crate::ir::AnyOfIr) -> TokenStream {
-        let name = to_ident(a.name.as_str());
-        let mut derives_list = a.derives.clone();
-        derives_list.retain(|d| d != "Default");
-        let derives = Self::emit_derives(&derives_list);
-        let doc_attr = Self::emit_doc(a.description.as_deref());
-
-        let variants = a.variants.iter().map(|v| {
-            let v_name = to_ident(&v.name);
-            let v_type = Self::emit_type_info(&v.type_info, true);
-            let v_doc_attr = Self::emit_doc(None); // anyof variants don't have distinct docs easily
-            quote! {
-                #v_doc_attr
-                #[serde(untagged)]
-                #v_name(#v_type),
-            }
-        });
-
-        let first_variant = a.variants.first();
-        let first_variant_name =
-            first_variant.map_or_else(|| to_ident("Variant0"), |v| to_ident(&v.name));
-        let first_variant_type = first_variant.map_or_else(
-            || quote! { serde_json::Value },
-            |v| Self::emit_type_info(&v.type_info, true),
-        );
-
-        quote! {
-            #doc_attr
-            #derives
-            pub enum #name {
-                #(#variants)*
-            }
-
-            impl Default for #name {
-                fn default() -> Self {
-                    Self::#first_variant_name(#first_variant_type::default())
-                }
-            }
-        }
-    }
-
-    fn emit_type_info(t: &TypeIr, required: bool) -> TokenStream {
-        let inner = match t {
-            TypeIr::Reference(r) => {
-                let ident = to_ident(r);
-                quote! { #ident }
-            }
-            TypeIr::Enum(e) => {
-                let ident = to_ident(e);
-                quote! { #ident }
-            }
-            TypeIr::Primitive(p) => match p {
-                PrimitiveType::String => quote! { String },
-                PrimitiveType::Integer => quote! { i64 },
-                PrimitiveType::Number => quote! { f64 },
-                PrimitiveType::Boolean => quote! { bool },
-                PrimitiveType::Date => quote! { chrono::NaiveDate },
-                PrimitiveType::DateTime => quote! { chrono::DateTime<chrono::Utc> },
-            },
-            TypeIr::Array(inner) => {
-                let inner_tokens = Self::emit_type_info(inner, true);
-                quote! { Vec<#inner_tokens> }
-            }
-            TypeIr::Map(inner) => {
-                let inner_tokens = Self::emit_type_info(inner, true);
-                quote! { std::collections::HashMap<String, #inner_tokens> }
-            }
-            TypeIr::Value => quote! { serde_json::Value },
-        };
-
-        if required {
-            inner
-        } else {
-            quote! { Option<#inner> }
-        }
-    }
-
-    fn emit_type_ref(t: &TypeIr) -> String {
-        match t {
-            TypeIr::Reference(r) => r.clone(),
-            TypeIr::Enum(e) => e.clone(),
-            TypeIr::Primitive(p) => match p {
-                PrimitiveType::String => "String".to_string(),
-                PrimitiveType::Integer => "i64".to_string(),
-                PrimitiveType::Number => "f64".to_string(),
-                PrimitiveType::Boolean => "bool".to_string(),
-                PrimitiveType::Date => "chrono::NaiveDate".to_string(),
-                PrimitiveType::DateTime => "chrono::DateTime<chrono::Utc>".to_string(),
-            },
-            TypeIr::Array(inner) => format!("Vec<{}>", Self::emit_type_ref(inner)),
-            TypeIr::Map(inner) => format!(
-                "std::collections::HashMap<String, {}>",
-                Self::emit_type_ref(inner)
-            ),
-            TypeIr::Value => "serde_json::Value".to_string(),
-        }
-    }
-
-    fn emit_derives(derives: &[String]) -> TokenStream {
-        let paths: Vec<TokenStream> = derives
-            .iter()
-            .map(|d| {
-                if d.contains("::") {
-                    let parts: Vec<_> = d
-                        .split("::")
-                        .map(|p| Ident::new(p, Span::call_site()))
-                        .collect();
-                    quote! { #(#parts)::* }
-                } else {
-                    let ident = Ident::new(d, Span::call_site());
-                    quote! { #ident }
-                }
-            })
-            .collect();
-        quote! { #[derive(#(#paths),*)] }
-    }
-
-    fn emit_validation(validation: &[ValidationIr], _type_info: &TypeIr) -> TokenStream {
-        if validation.is_empty() {
-            return TokenStream::new();
-        }
-        let mut parts = Vec::new();
-        for v in validation {
-            match v {
-                ValidationIr::Length { min, max } => {
-                    let mut l_parts = Vec::new();
-                    if let Some(m) = min {
-                        l_parts.push(quote! { min = #m });
-                    }
-                    if let Some(m) = max {
-                        l_parts.push(quote! { max = #m });
-                    }
-                    parts.push(quote! { length(#(#l_parts),*) });
-                }
-                ValidationIr::FloatRange { min, max } => {
-                    let mut r_parts = Vec::new();
-                    if let Some(m) = min {
-                        let lit = syn::LitFloat::new(&format!("{m:.1}f64"), Span::call_site());
-                        r_parts.push(quote! { min = #lit });
-                    }
-                    if let Some(m) = max {
-                        let lit = syn::LitFloat::new(&format!("{m:.1}f64"), Span::call_site());
-                        r_parts.push(quote! { max = #lit });
-                    }
-                    parts.push(quote! { range(#(#r_parts),*) });
-                }
-                ValidationIr::IntRange { min, max } => {
-                    let mut r_parts = Vec::new();
-                    if let Some(m) = min {
-                        let lit = syn::LitInt::new(&format!("{m}i64"), Span::call_site());
-                        r_parts.push(quote! { min = #lit });
-                    }
-                    if let Some(m) = max {
-                        let lit = syn::LitInt::new(&format!("{m}i64"), Span::call_site());
-                        r_parts.push(quote! { max = #lit });
-                    }
-                    parts.push(quote! { range(#(#r_parts),*) });
-                }
-            }
-        }
-        if parts.is_empty() {
-            TokenStream::new()
-        } else {
-            quote! { #[validate(#(#parts),*)] }
-        }
     }
 
     /// Writes the generated code to a file.
@@ -590,5 +232,18 @@ impl Generator {
             .ok_or_else(|| "OUT_DIR environment variable is not set".to_string())?;
         let dest_path = PathBuf::from(out_dir).join(filename);
         self.write_to_file(dest_path)
+    }
+}
+
+// Enum dispatch: TypeDefinitionIr -> inner type emit
+impl TypeDefinitionIr {
+    fn emit(&self, ctx: EmitContext) -> TokenStream {
+        match self {
+            Self::Struct(s) => s.emit(ctx),
+            Self::Enum(e) => e.emit(),
+            Self::Alias(a) => a.emit(),
+            Self::Newtype(n) => n.emit(),
+            Self::AnyOf(a) => a.emit(),
+        }
     }
 }
