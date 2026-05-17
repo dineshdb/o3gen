@@ -102,12 +102,16 @@ pub struct StructIr {
     pub fields: Vec<FieldIr>,
     pub derives: Vec<String>,
     pub description: Option<String>,
+    pub additional_properties_type: Option<TypeIr>,
 }
 
 impl StructIr {
     pub fn update_references(&mut self, renames: &HashMap<String, String>) {
         for field in &mut self.fields {
             field.type_info.update_reference(renames);
+        }
+        if let Some(ap) = &mut self.additional_properties_type {
+            ap.update_reference(renames);
         }
     }
 }

@@ -211,8 +211,20 @@ impl StructIr {
         let doc_attr = emit_doc(self.description.as_deref());
         let fields: Vec<TokenStream> = self.fields.iter().map(FieldIr::emit).collect();
 
-        let deny_unknown = if ctx.deny_unknown_fields {
+        let has_additional = self.additional_properties_type.is_some();
+        let deny_unknown = if !has_additional && ctx.deny_unknown_fields {
             quote! { #[serde(deny_unknown_fields)] }
+        } else {
+            quote! {}
+        };
+
+        let additional_properties_field = if let Some(ap_type) = &self.additional_properties_type {
+            let ap_tokens = ap_type.to_tokens(true);
+            quote! {
+                #[serde(flatten)]
+                #[builder(default)]
+                pub additional_properties: #ap_tokens,
+            }
         } else {
             quote! {}
         };
@@ -224,6 +236,7 @@ impl StructIr {
             #[builder(setter(into, strip_option), build_fn(name = "build_inner", vis = "pub(crate)"))]
             pub struct #name {
                 #(#fields)*
+                #additional_properties_field
             }
 
             impl #name {

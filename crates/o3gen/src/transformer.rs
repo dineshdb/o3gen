@@ -572,6 +572,7 @@ impl<'a> Transformer<'a> {
                     fields,
                     derives: self.get_struct_derives(&name),
                     description: None,
+                    additional_properties_type: None,
                 }),
             );
             Some(name)
@@ -836,6 +837,18 @@ impl TypeDefinitionIr {
         let description = schema.schema_data.description.clone();
         match &schema.schema_kind {
             SchemaKind::Type(Type::Object(obj)) => {
+                if obj.properties.is_empty()
+                    && matches!(
+                        obj.additional_properties,
+                        Some(openapiv3::AdditionalProperties::Any(true))
+                    )
+                {
+                    return Ok(Self::Alias(AliasIr {
+                        name: ir_name,
+                        target: TypeIr::Value,
+                        description,
+                    }));
+                }
                 StructIr::from_object(name, obj, description, ir_name, xf).map(Self::Struct)
             }
             SchemaKind::Type(Type::String(s)) if !s.enumeration.is_empty() => {
@@ -917,6 +930,7 @@ impl StructIr {
             fields,
             derives: xf.get_struct_derives(name),
             description,
+            additional_properties_type: None,
         })
     }
 
@@ -927,14 +941,29 @@ impl StructIr {
         ir_name: Name,
         xf: TransformCtx<'_, '_>,
     ) -> Result<Self, String> {
-        Self::from_fields(
+        let additional_properties_type = match &obj.additional_properties {
+            Some(openapiv3::AdditionalProperties::Any(true)) => {
+                Some(TypeIr::Map(Box::new(TypeIr::Value)))
+            }
+            Some(openapiv3::AdditionalProperties::Schema(schema_ref)) => {
+                let ap_type =
+                    xf.schema_ref_to_type_ir(name, "additional_properties", schema_ref.as_ref())?;
+                Some(TypeIr::Map(Box::new(ap_type)))
+            }
+            _ => None,
+        };
+
+        let mut result = Self::from_fields(
             name,
             obj.properties.iter().map(|(k, v)| (k.clone(), v.clone())),
             &obj.required.iter().cloned().collect::<HashSet<_>>(),
             description,
             ir_name,
             xf,
-        )
+        )?;
+
+        result.additional_properties_type = additional_properties_type;
+        Ok(result)
     }
 
     fn from_any(
@@ -944,14 +973,29 @@ impl StructIr {
         ir_name: Name,
         xf: TransformCtx<'_, '_>,
     ) -> Result<Self, String> {
-        Self::from_fields(
+        let additional_properties_type = match &any.additional_properties {
+            Some(openapiv3::AdditionalProperties::Any(true)) => {
+                Some(TypeIr::Map(Box::new(TypeIr::Value)))
+            }
+            Some(openapiv3::AdditionalProperties::Schema(schema_ref)) => {
+                let ap_type =
+                    xf.schema_ref_to_type_ir(name, "additional_properties", schema_ref.as_ref())?;
+                Some(TypeIr::Map(Box::new(ap_type)))
+            }
+            _ => None,
+        };
+
+        let mut result = Self::from_fields(
             name,
             any.properties.iter().map(|(k, v)| (k.clone(), v.clone())),
             &any.required.iter().cloned().collect::<HashSet<_>>(),
             description,
             ir_name,
             xf,
-        )
+        )?;
+
+        result.additional_properties_type = additional_properties_type;
+        Ok(result)
     }
 
     fn from_all_of(
@@ -1000,6 +1044,7 @@ impl StructIr {
             fields,
             derives: xf.get_struct_derives(name),
             description,
+            additional_properties_type: None,
         })
     }
 }

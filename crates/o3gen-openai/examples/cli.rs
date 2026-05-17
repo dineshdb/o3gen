@@ -5,6 +5,14 @@ use futures_util::StreamExt;
 use o3gen_openai::OpenAIApiClient;
 use o3gen_openai::types::*;
 
+const SYSTEM: &str = r"
+- Fix the root cause, not the symptoms. Think before reaching a conclusion: are you solving the root cause or the symptoms?
+- Be terse. Small and useful response only.
+- Follow through and verify your output against the user's goal.
+- Solve tasks by invoking available tools whenever they might help. Prefer tools over direct answers when in doubt.
+- load skills to know more about a topic and follow the instructions.
+";
+
 fn tool_def(name: &str, description: &str) -> ChatCompletionTool {
     ChatCompletionTool::builder()
         .r#type(ChatCompletionToolType::Function)
@@ -12,7 +20,7 @@ fn tool_def(name: &str, description: &str) -> ChatCompletionTool {
             FunctionObject::builder()
                 .name(name.to_string())
                 .description(description.to_string())
-                .parameters(FunctionParameters::builder().build().unwrap())
+                .parameters(serde_json::json!({}))
                 .build()
                 .unwrap(),
         )
@@ -58,13 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut msgs: Vec<ChatCompletionRequestMessage> =
         vec![ChatCompletionRequestMessage::SystemMessage(
             ChatCompletionRequestSystemMessage::builder()
-                .content(
-                    "You are a helpful assistant with access to the local filesystem. \
-                     You can read files, list directories, and search file contents. \
-                     Use these tools when the user asks about files or the filesystem. \
-                     Be concise and show relevant results."
-                        .to_string(),
-                )
+                .content(SYSTEM)
                 .role(ChatCompletionRequestSystemMessageRole::System)
                 .build()?,
         )];
