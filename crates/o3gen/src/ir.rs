@@ -69,6 +69,12 @@ pub enum Name {
     Generated(String),
 }
 
+impl From<String> for Name {
+    fn from(s: String) -> Self {
+        Self::Provided(s)
+    }
+}
+
 impl Name {
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -216,6 +222,12 @@ pub enum TypeIr {
     Map(Box<TypeIr>),
     Value,        // serde_json::Value
     Enum(String), // Reference to an enum type definition
+}
+
+impl From<PrimitiveType> for TypeIr {
+    fn from(p: PrimitiveType) -> Self {
+        Self::Primitive(p)
+    }
 }
 
 impl TypeIr {

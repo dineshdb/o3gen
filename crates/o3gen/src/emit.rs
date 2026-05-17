@@ -269,6 +269,7 @@ impl EnumIr {
     #[must_use]
     pub fn emit(&self) -> TokenStream {
         let name = to_ident(self.name.as_str());
+        let name_str = self.name.as_str();
         let derives = emit_derives(&self.derives);
         let doc_attr = emit_doc(self.description.as_deref());
         let rename_all_attr = self
@@ -299,12 +300,44 @@ impl EnumIr {
                 #v_name,
             }
         });
+        let parse_arms = self.variants.iter().map(|v| {
+            let v_ident = to_ident(&v.rust_name);
+            let pascal_name = &v.rust_name;
+            let value_str = &v.value;
+            quote! {
+                #value_str | #pascal_name => Ok(Self::#v_ident),
+            }
+        });
         quote! {
             #doc_attr
             #derives
             #rename_all_attr
             pub enum #name {
                 #(#variants)*
+            }
+
+            impl std::str::FromStr for #name {
+                type Err = String;
+                fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+                    match s {
+                        #(#parse_arms)*
+                        _ => Err(format!("unknown variant `{s}` for enum {}", #name_str)),
+                    }
+                }
+            }
+
+            impl From<&str> for #name {
+                fn from(s: &str) -> Self {
+                    s.parse().unwrap_or_else(|_| {
+                        panic!("invalid value for {}: {}", #name_str, s)
+                    })
+                }
+            }
+
+            impl From<String> for #name {
+                fn from(s: String) -> Self {
+                    Self::from(s.as_str())
+                }
             }
         }
     }
@@ -330,10 +363,22 @@ impl NewtypeIr {
         let derives = emit_derives(&self.derives);
         let target = self.target.to_tokens(true);
         let doc_attr = emit_doc(self.description.as_deref());
+        let from_str = if matches!(self.target, TypeIr::Primitive(PrimitiveType::String)) {
+            quote! {
+                impl From<&str> for #name {
+                    fn from(s: &str) -> Self {
+                        Self(s.to_owned())
+                    }
+                }
+            }
+        } else {
+            TokenStream::new()
+        };
         quote! {
             #doc_attr
             #derives
             pub struct #name(pub #target);
+            #from_str
         }
     }
 }

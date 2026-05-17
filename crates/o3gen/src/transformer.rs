@@ -973,7 +973,6 @@ impl<'a> Transformer<'a> {
                 "PartialEq",
                 "Default",
                 "strum::Display",
-                "strum::EnumString",
                 "strum::EnumIter",
             ],
         )

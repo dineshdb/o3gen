@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "o3gen"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "heck",
  "http",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "o3gen-openai"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "derive_builder",
  "derive_more",

@@ -13,7 +13,12 @@ fn main() {
         .write_to_out_dir("composite.rs")
         .expect("Failed to generate composite.rs");
 
+    Generator::builder("fixtures/newtypes.json")
+        .write_to_out_dir("newtypes.rs")
+        .expect("Failed to generate newtypes.rs");
+
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=petstore.json");
     println!("cargo:rerun-if-changed=fixtures/composite.json");
+    println!("cargo:rerun-if-changed=fixtures/newtypes.json");
 }

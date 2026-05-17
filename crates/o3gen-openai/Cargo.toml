@@ -1,6 +1,6 @@
 [package]
 name = "o3gen-openai"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "OpenAI API client generated from the OpenAPI spec using o3gen"
 license = "MIT"
@@ -20,7 +20,7 @@ derive_more = { version = "2.1.1", features = ["display", "from"] }
 thiserror = "2.0.18"
 
 [build-dependencies]
-o3gen = { version = "0.5.0", path = "../o3gen" }
+o3gen = { version = "0.6.0", path = "../o3gen" }
 
 [dev-dependencies]
 mockito = "1.7.2"
