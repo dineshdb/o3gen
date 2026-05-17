@@ -413,7 +413,7 @@ impl AnyOfIr {
     pub fn emit(&self) -> TokenStream {
         let name = to_ident(self.name.as_str());
         let mut derives_list = self.derives.clone();
-        derives_list.retain(|d| d != "Default");
+        derives_list.retain(|d| d != "Default" && d != "derive_more::From");
         let derives = emit_derives(&derives_list);
         let doc_attr = emit_doc(self.description.as_deref());
 
@@ -425,6 +425,18 @@ impl AnyOfIr {
                 #v_doc_attr
                 #[serde(untagged)]
                 #v_name(#v_type),
+            }
+        });
+
+        let from_impls = self.variants.iter().map(|v| {
+            let v_name = to_ident(&v.name);
+            let v_type = v.type_info.to_tokens(true);
+            quote! {
+                impl From<#v_type> for #name {
+                    fn from(v: #v_type) -> Self {
+                        Self::#v_name(v)
+                    }
+                }
             }
         });
 
@@ -448,6 +460,8 @@ impl AnyOfIr {
                     Self::#first_variant_name(#first_variant_type::default())
                 }
             }
+
+            #(#from_impls)*
         }
     }
 }

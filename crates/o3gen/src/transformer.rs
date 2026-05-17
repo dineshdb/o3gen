@@ -804,7 +804,6 @@ impl<'a> Transformer<'a> {
                 "Deserialize",
                 "PartialEq",
                 "Default",
-                "derive_more::From",
             ],
         )
     }
