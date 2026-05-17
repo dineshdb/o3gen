@@ -1,6 +1,6 @@
 [package]
 name = "o3gen"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "MIT"
 description = "A library to generate Rust types from OpenAPI 3.0 specifications with renaming support."

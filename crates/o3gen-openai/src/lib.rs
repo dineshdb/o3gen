@@ -13,7 +13,7 @@
 //! # async fn main() -> Result<(), o3gen_openai::ApiError> {
 //! let client = OpenAIApiClient::new("https://api.openai.com/v1".into());
 //!
-//! let body = CreateChatCompletionRequest::builder()
+//! let body = ChatCompletionRequest::builder()
 //!     .model("gpt-4o".to_string())
 //!     .messages(vec![
 //!         ChatCompletionRequestUserMessage::builder()
@@ -46,7 +46,7 @@
 //! let client = OpenAIApiClient::new("https://api.openai.com/v1".into())
 //!     .with_api_key("sk-...".into());
 //!
-//! let body = CreateChatCompletionRequest::builder()
+//! let body = ChatCompletionRequest::builder()
 //!     .model("gpt-4o".to_string())
 //!     .messages(vec![
 //!         ChatCompletionRequestUserMessage::builder()
@@ -59,7 +59,7 @@
 //!     ])
 //!     .build()?;
 //!
-//! let mut stream = client.stream_chat_completion(body).await?;
+//! let mut stream = client.stream_chat(body).await?;
 //! while let Some(chunk) = stream.next().await {
 //!     let chunk = chunk?;
 //!     for choice in &chunk.choices {
