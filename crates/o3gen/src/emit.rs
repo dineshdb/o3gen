@@ -4,7 +4,8 @@ use syn::Ident;
 
 use crate::helpers::to_ident;
 use crate::ir::{
-    AliasIr, AnyOfIr, EnumIr, FieldIr, NewtypeIr, PrimitiveType, StructIr, TypeIr, ValidationIr,
+    AliasIr, AnyOfIr, EnumIr, FieldIr, NewtypeIr, PrimitiveType, StructIr, TypeDefinitionIr,
+    TypeIr, ValidationIr,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -188,7 +189,18 @@ impl FieldIr {
     }
 }
 
-// --- Type definition emit methods ---
+impl TypeDefinitionIr {
+    #[must_use]
+    pub fn emit(&self, ctx: EmitContext) -> TokenStream {
+        match self {
+            Self::Struct(s) => s.emit(ctx),
+            Self::Enum(e) => e.emit(),
+            Self::Alias(a) => a.emit(),
+            Self::Newtype(n) => n.emit(),
+            Self::AnyOf(a) => a.emit(),
+        }
+    }
+}
 
 impl StructIr {
     #[must_use]

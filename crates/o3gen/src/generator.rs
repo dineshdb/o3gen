@@ -10,7 +10,7 @@ use crate::client::{
 use crate::config::Config;
 use crate::emit::EmitContext;
 use crate::helpers::to_ident;
-use crate::ir::{ApiIr, TypeDefinitionIr, TypeIr};
+use crate::ir::{ApiIr, TypeIr};
 use crate::transformer::Transformer;
 
 #[derive(Debug)]
@@ -241,18 +241,5 @@ impl Generator {
             .ok_or_else(|| "OUT_DIR environment variable is not set".to_string())?;
         let dest_path = PathBuf::from(out_dir).join(filename);
         self.write_to_file(dest_path)
-    }
-}
-
-// Enum dispatch: TypeDefinitionIr -> inner type emit
-impl TypeDefinitionIr {
-    fn emit(&self, ctx: EmitContext) -> TokenStream {
-        match self {
-            Self::Struct(s) => s.emit(ctx),
-            Self::Enum(e) => e.emit(),
-            Self::Alias(a) => a.emit(),
-            Self::Newtype(n) => n.emit(),
-            Self::AnyOf(a) => a.emit(),
-        }
     }
 }
