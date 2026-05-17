@@ -2,28 +2,26 @@
 name = "o3gen-openai"
 version = "0.1.0"
 edition = "2024"
-publish = false
+description = "OpenAI API client generated from the OpenAPI spec using o3gen"
+license = "MIT"
+repository = "https://github.com/dineshdb/o3gen"
+keywords = ["openai", "openapi", "generator", "client"]
+categories = ["api-bindings", "web-programming::http-client"]
 
 [dependencies]
-o3gen = { path = "../o3gen" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-async-trait = "0.1.89"
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
-chrono = { version = "0.4.44", features = ["serde"] }
 validator = { version = "0.20.0", features = ["derive"] }
-http = "1.4.0"
 derive_builder = "0.20.2"
 strum = { version = "0.28.0", features = ["derive"] }
 derive_more = { version = "2.1.1", features = ["display", "from"] }
 thiserror = "2.0.18"
 
 [build-dependencies]
-o3gen = { path = "../o3gen" }
+o3gen = { version = "0.5.0", path = "../o3gen" }
 
 [dev-dependencies]
 mockito = "1.7.2"
-tempfile = "3.0"
-mockall = "0.14"
 serde_json = "1.0"
