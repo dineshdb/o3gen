@@ -5,7 +5,10 @@ fn main() {
     Generator::builder("openai.json")
         .api_name("OpenAIApi")
         .deny_unknown_fields(false)
-        .rename("CreateChatCompletionRequestModelVariant1", "Upstream")
+        .rename("CreateChatCompletionRequest", "ChatCompletionRequest")
+        .rename("ChatCompletionRequestModelVariant1", "Upstream")
+        .rename("ChatCompletionMessageToolCallFunction", "ToolCallFunction")
+        .rename("ChatCompletionMessageToolCall", "ToolCall")
         .write_to_out_dir("openai.rs")
         .expect("Failed to generate openai.rs");
 

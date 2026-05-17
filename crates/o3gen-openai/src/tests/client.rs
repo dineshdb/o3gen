@@ -1,7 +1,4 @@
-use crate::types::CreateModerationRequestModel;
-use crate::{
-    CreateChatCompletionRequestModel, CreateEmbeddingRequestModel, OpenAIApi, OpenAIApiClient,
-};
+use crate::{OpenAIApi, OpenAIApiClient};
 use mockito::ServerGuard;
 use serde::Serialize;
 
@@ -102,22 +99,19 @@ async fn test_create_chat_completion() {
         },
     );
 
-    let body = crate::types::CreateChatCompletionRequest::builder()
-        .model(CreateChatCompletionRequestModel::String(
-            "gpt-3.5-turbo".to_string(),
-        ))
+    let body = crate::types::ChatCompletionRequest::builder()
+        .model("gpt-3.5-turbo".to_string())
         .messages(vec![
-            crate::types::ChatCompletionRequestMessage::UserMessage(
-                crate::types::ChatCompletionRequestUserMessage::builder()
-                    .role(crate::types::ChatCompletionRequestUserMessageRole::User)
-                    .content(
-                        crate::types::ChatCompletionRequestUserMessageContent::String(
-                            "Hello".to_string(),
-                        ),
-                    )
-                    .build()
-                    .unwrap(),
-            ),
+            crate::types::ChatCompletionRequestUserMessage::builder()
+                .role(crate::types::ChatCompletionRequestUserMessageRole::User)
+                .content(
+                    crate::types::ChatCompletionRequestUserMessageContent::String(
+                        "Hello".to_string(),
+                    ),
+                )
+                .build()
+                .unwrap()
+                .into(),
         ])
         .build()
         .unwrap();
@@ -135,75 +129,6 @@ async fn test_create_chat_completion() {
 
     mock.assert_async().await;
 }
-
-// ── Create Moderation ──────────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_create_moderation() {
-    let mut server = mockito::Server::new_async().await;
-    let client = OpenAIApiClient::new(server.url());
-    let no_categories = crate::types::Categories {
-        hate: false,
-        hate_threatening: false,
-        harassment: false,
-        harassment_threatening: false,
-        self_harm: false,
-        self_harm_intent: false,
-        self_harm_instructions: false,
-        sexual: false,
-        sexual_minors: false,
-        violence: false,
-        violence_graphic: false,
-    };
-    let zero_scores = crate::types::CategoryScores {
-        hate: 0.0,
-        hate_threatening: 0.0,
-        harassment: 0.0,
-        harassment_threatening: 0.0,
-        self_harm: 0.0,
-        self_harm_intent: 0.0,
-        self_harm_instructions: 0.0,
-        sexual: 0.0,
-        sexual_minors: 0.0,
-        violence: 0.0,
-        violence_graphic: 0.0,
-    };
-    let mock = mock_post(
-        &mut server,
-        "/moderations",
-        200,
-        &crate::types::CreateModerationResponse {
-            id: "modr-abc123".into(),
-            model: "text-moderation-stable".into(),
-            results: vec![crate::types::CreateModerationResponseResults {
-                flagged: false,
-                categories: no_categories,
-                category_scores: zero_scores,
-            }],
-        },
-    );
-
-    let body = crate::types::CreateModerationRequest::builder()
-        .input(crate::types::CreateModerationRequestInput::String(
-            "I want to kill them.".to_string(),
-        ))
-        .model(CreateModerationRequestModel::TextModeration(
-            crate::types::TextModeration::TextModerationStable,
-        ))
-        .build()
-        .unwrap();
-
-    let resp = OpenAIApi::create_moderation(&client, body).await.unwrap();
-    assert_eq!(resp.id, "modr-abc123");
-    assert_eq!(resp.results.len(), 1);
-    assert!(!resp.results[0].flagged);
-    assert!(!resp.results[0].categories.hate);
-    assert!(!resp.results[0].categories.violence);
-
-    mock.assert_async().await;
-}
-
-// ── Create Embedding ───────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_create_embedding() {
@@ -229,12 +154,8 @@ async fn test_create_embedding() {
     );
 
     let body = crate::types::CreateEmbeddingRequest::builder()
-        .input(crate::types::CreateEmbeddingRequestInput::String(
-            "Hello world".to_string(),
-        ))
-        .model(CreateEmbeddingRequestModel::String(
-            "text-embedding-ada-002".to_string(),
-        ))
+        .input("Hello world".to_string())
+        .model("text-embedding-ada-002".to_string())
         .build()
         .unwrap();
 

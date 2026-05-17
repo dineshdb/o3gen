@@ -14,15 +14,16 @@
 //! let client = OpenAIApiClient::new("https://api.openai.com/v1".into());
 //!
 //! let body = CreateChatCompletionRequest::builder()
-//!     .model(CreateChatCompletionRequestModel::String("gpt-4o".into()))
-//!     .messages(vec![ChatCompletionRequestMessage::UserMessage(
+//!     .model("gpt-4o".to_string())
+//!     .messages(vec![
 //!         ChatCompletionRequestUserMessage::builder()
 //!             .role(ChatCompletionRequestUserMessageRole::User)
 //!             .content(ChatCompletionRequestUserMessageContent::String(
 //!                 "Hello!".into(),
 //!             ))
-//!             .build()?,
-//!     )])
+//!             .build()?
+//!             .into(),
+//!     ])
 //!     .build()?;
 //!
 //! let resp = OpenAIApi::create_chat_completion(&client, body).await?;
@@ -46,15 +47,16 @@
 //!     .with_api_key("sk-...".into());
 //!
 //! let body = CreateChatCompletionRequest::builder()
-//!     .model(CreateChatCompletionRequestModel::String("gpt-4o".into()))
-//!     .messages(vec![ChatCompletionRequestMessage::UserMessage(
+//!     .model("gpt-4o".to_string())
+//!     .messages(vec![
 //!         ChatCompletionRequestUserMessage::builder()
 //!             .role(ChatCompletionRequestUserMessageRole::User)
 //!             .content(ChatCompletionRequestUserMessageContent::String(
 //!                 "Hello!".into(),
 //!             ))
-//!             .build()?,
-//!     )])
+//!             .build()?
+//!             .into(),
+//!     ])
 //!     .build()?;
 //!
 //! let mut stream = client.stream_chat_completion(body).await?;
@@ -83,9 +85,9 @@ impl OpenAIApiClient {
     /// into [`CreateChatCompletionStreamResponse`] chunks. The `[DONE]` signal
     /// is filtered out automatically.
     #[allow(clippy::type_repetition_in_bounds)]
-    pub async fn stream_chat_completion(
+    pub async fn stream_chat(
         &self,
-        request: CreateChatCompletionRequest,
+        request: ChatCompletionRequest,
     ) -> Result<BoxStream<'static, Result<CreateChatCompletionStreamResponse>>> {
         let url = format!("{}/chat/completions", self.base_url);
 
@@ -128,33 +130,6 @@ impl OpenAIApiClient {
                     Ok(None) => None,
                     Err(e) => Some(Err(e)),
                 }
-            });
-
-        Ok(mapped.boxed())
-    }
-
-    /// Stream only content delta strings from a chat completion.
-    ///
-    /// Convenience wrapper around [`stream_chat_completion`] that extracts
-    /// text deltas from each chunk and discards tool-call and finish events.
-    pub async fn stream_text(
-        &self,
-        request: CreateChatCompletionRequest,
-    ) -> Result<BoxStream<'static, Result<String>>> {
-        let mapped = self
-            .stream_chat_completion(request)
-            .await?
-            .flat_map(|chunk_res| {
-                let deltas: Vec<Result<String>> = match chunk_res {
-                    Ok(chunk) => chunk
-                        .choices
-                        .iter()
-                        .filter_map(|c| c.delta.content.clone())
-                        .map(Ok)
-                        .collect(),
-                    Err(e) => vec![Err(e)],
-                };
-                futures_util::stream::iter(deltas)
             });
 
         Ok(mapped.boxed())

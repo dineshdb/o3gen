@@ -63,13 +63,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".into());
 
     let client = OpenAIApiClient::new(base_url).with_api_key(api_key);
-    let mut msgs: Vec<ChatCompletionRequestMessage> =
-        vec![ChatCompletionRequestMessage::SystemMessage(
-            ChatCompletionRequestSystemMessage::builder()
-                .content(SYSTEM)
-                .role(ChatCompletionRequestSystemMessageRole::System)
-                .build()?,
-        )];
+    let mut msgs: Vec<ChatCompletionRequestMessage> = vec![
+        ChatCompletionRequestSystemMessage::builder()
+            .content(SYSTEM)
+            .role(ChatCompletionRequestSystemMessageRole::System)
+            .build()?
+            .into(),
+    ];
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -86,24 +86,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
 
-        msgs.push(ChatCompletionRequestMessage::UserMessage(
+        msgs.push(
             ChatCompletionRequestUserMessage::builder()
                 .role(ChatCompletionRequestUserMessageRole::User)
                 .content(ChatCompletionRequestUserMessageContent::String(input))
-                .build()?,
-        ));
+                .build()?
+                .into(),
+        );
 
         loop {
-            let req = CreateChatCompletionRequest::builder()
-                .model(CreateChatCompletionRequestModel::String(model.clone()))
+            let req = ChatCompletionRequest::builder()
+                .model(model.clone())
                 .messages(msgs.clone())
                 .tools(tools())
-                .tool_choice(ChatCompletionToolChoiceOption::Variant0(
-                    ChatCompletionToolChoiceOptionVariant0::Auto,
-                ))
                 .build()?;
 
-            let mut stream = client.stream_chat_completion(req).await?;
+            let mut stream = client.stream_chat(req).await?;
 
             let mut content = String::new();
             let mut acc: HashMap<usize, AccTool> = HashMap::new();
@@ -152,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(content)
             };
 
-            let tool_calls: Vec<ChatCompletionMessageToolCall> = if acc.is_empty() {
+            let tool_calls: Vec<ToolCall> = if acc.is_empty() {
                 Vec::new()
             } else {
                 let mut sorted: Vec<_> = acc.into_iter().collect();
@@ -160,11 +158,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sorted
                     .into_iter()
                     .map(|(_, t)| {
-                        ChatCompletionMessageToolCall::builder()
+                        ToolCall::builder()
                             .id(t.id)
-                            .r#type(ChatCompletionMessageToolCallType::Function)
+                            .r#type(ToolCallType::Function)
                             .function(
-                                ChatCompletionMessageToolCallFunction::builder()
+                                ToolCallFunction::builder()
                                     .name(t.name)
                                     .arguments(t.arguments)
                                     .build()?,
@@ -183,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !tool_calls.is_empty() {
                     b.tool_calls(tool_calls.clone());
                 }
-                msgs.push(ChatCompletionRequestMessage::AssistantMessage(b.build()?));
+                msgs.push(b.build()?.into());
             }
 
             match finish_reason {
@@ -226,7 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if !result_str.is_empty() {
                                 b.content(result_str);
                             }
-                            msgs.push(ChatCompletionRequestMessage::ToolMessage(b.build()?));
+                            msgs.push(b.build()?.into());
                         }
                     }
                 }

@@ -1,4 +1,4 @@
-use crate::types::{CreateChatCompletionRequestModel, Upstream};
+use crate::types::{ChatCompletionRequestModel, Upstream};
 
 #[test]
 fn test_rename_upstream_regression() {
@@ -7,10 +7,10 @@ fn test_rename_upstream_regression() {
 
     // 2. Verify CreateChatCompletionRequestModel has an Upstream variant
     // instead of the auto-generated Variant1.
-    let enum_variant = CreateChatCompletionRequestModel::Upstream(Upstream::Gpt41106Preview);
+    let enum_variant: ChatCompletionRequestModel = Upstream::Gpt41106Preview.into();
 
     match enum_variant {
-        CreateChatCompletionRequestModel::Upstream(u) => assert_eq!(u, Upstream::Gpt41106Preview),
+        ChatCompletionRequestModel::Upstream(u) => assert_eq!(u, Upstream::Gpt41106Preview),
         _ => panic!("Expected Upstream variant"),
     }
 }
