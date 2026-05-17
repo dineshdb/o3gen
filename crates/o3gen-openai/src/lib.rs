@@ -30,8 +30,136 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Streaming
+//!
+//! `OpenAIApiClient` also provides built-in SSE streaming for chat completions:
+//!
+//! ```no_run
+//! use o3gen_openai::OpenAIApiClient;
+//! use o3gen_openai::types::*;
+//! use futures_util::StreamExt;
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), o3gen_openai::ApiError> {
+//! let client = OpenAIApiClient::new("https://api.openai.com/v1".into())
+//!     .with_api_key("sk-...".into());
+//!
+//! let body = CreateChatCompletionRequest::builder()
+//!     .model(CreateChatCompletionRequestModel::String("gpt-4o".into()))
+//!     .messages(vec![ChatCompletionRequestMessage::UserMessage(
+//!         ChatCompletionRequestUserMessage::builder()
+//!             .role(ChatCompletionRequestUserMessageRole::User)
+//!             .content(ChatCompletionRequestUserMessageContent::String(
+//!                 "Hello!".into(),
+//!             ))
+//!             .build()?,
+//!     )])
+//!     .build()?;
+//!
+//! let mut stream = client.stream_chat_completion(body).await?;
+//! while let Some(chunk) = stream.next().await {
+//!     let chunk = chunk?;
+//!     for choice in &chunk.choices {
+//!         if let Some(content) = &choice.delta.content {
+//!             print!("{content}");
+//!         }
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
 
 include!(concat!(env!("OUT_DIR"), "/openai.rs"));
+
+impl OpenAIApiClient {
+    /// Stream chat completion chunks via SSE (stream=true).
+    ///
+    /// Injects `"stream": true` into the request and parses the SSE response
+    /// into [`CreateChatCompletionStreamResponse`] chunks. The `[DONE]` signal
+    /// is filtered out automatically.
+    #[allow(clippy::type_repetition_in_bounds)]
+    pub async fn stream_chat_completion(
+        &self,
+        request: CreateChatCompletionRequest,
+    ) -> Result<BoxStream<'static, Result<CreateChatCompletionStreamResponse>>> {
+        let url = format!("{}/chat/completions", self.base_url);
+
+        let mut body = serde_json::to_value(&request).map_err(ApiError::Serde)?;
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+        }
+
+        let mut req = self.client.post(&url).json(&body);
+
+        if let Some(key) = &self.api_key {
+            req = req.header("Authorization", &format!("Bearer {key}"));
+        }
+
+        let resp = req.send().await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(ApiError::Status {
+                status,
+                body: body_text,
+            });
+        }
+
+        let stream = resp.bytes_stream().eventsource();
+
+        let mapped = stream
+            .map(|event| {
+                let event = event.map_err(|e| ApiError::Builder(format!("SSE error: {e}")))?;
+                if event.data == "[DONE]" {
+                    return Ok(None);
+                }
+                let chunk: CreateChatCompletionStreamResponse = serde_json::from_str(&event.data)?;
+                Ok(Some(chunk))
+            })
+            .filter_map(|res| async {
+                match res {
+                    Ok(Some(chunk)) => Some(Ok(chunk)),
+                    Ok(None) => None,
+                    Err(e) => Some(Err(e)),
+                }
+            });
+
+        Ok(mapped.boxed())
+    }
+
+    /// Stream only content delta strings from a chat completion.
+    ///
+    /// Convenience wrapper around [`stream_chat_completion`] that extracts
+    /// text deltas from each chunk and discards tool-call and finish events.
+    pub async fn stream_text(
+        &self,
+        request: CreateChatCompletionRequest,
+    ) -> Result<BoxStream<'static, Result<String>>> {
+        let mapped = self
+            .stream_chat_completion(request)
+            .await?
+            .flat_map(|chunk_res| {
+                let deltas: Vec<Result<String>> = match chunk_res {
+                    Ok(chunk) => chunk
+                        .choices
+                        .iter()
+                        .filter_map(|c| c.delta.content.clone())
+                        .map(Ok)
+                        .collect(),
+                    Err(e) => vec![Err(e)],
+                };
+                futures_util::stream::iter(deltas)
+            });
+
+        Ok(mapped.boxed())
+    }
+}
 
 #[cfg(test)]
 pub mod tests;
