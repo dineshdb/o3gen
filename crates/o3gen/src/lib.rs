@@ -10,5 +10,6 @@ pub use client::generate_client_traits;
 pub use config::Config;
 pub use generator::Generator;
 pub use ir::{
-    ApiIr, OperationIr, ParameterIr, ParameterLocation, PrimitiveType, ResponseIr, TypeIr,
+    ApiIr, ApiKeyLocation, OperationIr, ParameterIr, ParameterLocation, PrimitiveType, ResponseIr,
+    SecuritySchemeIr, TypeIr,
 };

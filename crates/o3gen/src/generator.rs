@@ -91,10 +91,10 @@ impl Generator {
             .clone()
             .unwrap_or_else(|| crate::helpers::to_pascal_case(&openapi.info.title));
 
-        self.emit(ir, &api_name)
+        self.emit(&ir, &api_name)
     }
 
-    fn emit(&self, ir: ApiIr, api_name: &str) -> Result<String, String> {
+    fn emit(&self, ir: &ApiIr, api_name: &str) -> Result<String, String> {
         let ctx = EmitContext {
             deny_unknown_fields: self.config.deny_unknown_fields,
         };
@@ -160,8 +160,17 @@ impl Generator {
             pub use types::*;
         });
 
+        output_tokens.extend(Self::emit_client_code(ir, api_name));
+
+        let file = parse2::<File>(output_tokens)
+            .map_err(|e| format!("Failed to parse generated tokens: {e}"))?;
+
+        Ok(prettyplease::unparse(&file))
+    }
+
+    fn emit_client_code(ir: &ApiIr, api_name: &str) -> TokenStream {
         let mut operations_details = Vec::new();
-        for op in ir.operations {
+        for op in &ir.operations {
             let response_type = op.responses.iter().find_map(|r| {
                 if r.code.is_success() {
                     r.type_info.as_ref().map(TypeIr::to_type_string)
@@ -181,34 +190,34 @@ impl Generator {
                 .collect();
 
             operations_details.push(OperationDetails {
-                operation_id: op.operation_id,
-                http_method: op.method,
+                operation_id: op.operation_id.clone(),
+                http_method: op.method.clone(),
                 response_type,
                 parameters,
                 request_body_type: op.request_body.as_ref().map(TypeIr::to_type_string),
-                path: op.path,
+                path: op.path.clone(),
                 description: op.description.clone(),
             });
         }
         operations_details.sort_by(|a, b| a.operation_id.cmp(&b.operation_id));
 
-        if !operations_details.is_empty() {
-            let trait_ident = to_ident(api_name);
-            let client_name = format!("{api_name}Client");
-            let client_ident = to_ident(&client_name);
-
-            output_tokens.extend(generate_client_traits(&trait_ident, &operations_details));
-            output_tokens.extend(generate_client_impl(
-                &trait_ident,
-                &client_ident,
-                &operations_details,
-            ));
+        if operations_details.is_empty() {
+            return TokenStream::new();
         }
 
-        let file = parse2::<File>(output_tokens)
-            .map_err(|e| format!("Failed to parse generated tokens: {e}"))?;
+        let trait_ident = to_ident(api_name);
+        let client_name = format!("{api_name}Client");
+        let client_ident = to_ident(&client_name);
 
-        Ok(prettyplease::unparse(&file))
+        let mut tokens = TokenStream::new();
+        tokens.extend(generate_client_traits(&trait_ident, &operations_details));
+        tokens.extend(generate_client_impl(
+            &trait_ident,
+            &client_ident,
+            &operations_details,
+            &ir.security_schemes,
+        ));
+        tokens
     }
 
     /// Writes the generated code to a file.

@@ -289,3 +289,61 @@ async fn test_not_found_error() {
         other => panic!("expected Status error, got: {other:?}"),
     }
 }
+
+// ── Auth / API Key ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_with_api_key_sends_bearer_token() {
+    let mut server = mockito::Server::new_async().await;
+    let client = OpenAIApiClient::new(server.url()).with_api_key("sk-test-key".into());
+
+    let mock = server
+        .mock("GET", "/models")
+        .match_header("Authorization", "Bearer sk-test-key")
+        .with_status(200)
+        .with_body(
+            serde_json::to_string(&crate::types::ListModelsResponse {
+                object: crate::types::ListModelsResponseObject::List,
+                data: vec![crate::types::Model {
+                    id: "gpt-4o".to_string(),
+                    object: crate::types::ModelObject::Model,
+                    created: 1661989079,
+                    owned_by: "openai".to_string(),
+                }],
+            })
+            .unwrap(),
+        )
+        .create();
+
+    let resp = OpenAIApi::list_models(&client).await.unwrap();
+    assert_eq!(resp.data.len(), 1);
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn test_without_api_key_omits_auth_header() {
+    let mut server = mockito::Server::new_async().await;
+    let client = OpenAIApiClient::new(server.url());
+
+    let mock = server
+        .mock("GET", "/models")
+        .match_header("Authorization", mockito::Matcher::Missing)
+        .with_status(200)
+        .with_body(
+            serde_json::to_string(&crate::types::ListModelsResponse {
+                object: crate::types::ListModelsResponseObject::List,
+                data: vec![crate::types::Model {
+                    id: "gpt-4o".to_string(),
+                    object: crate::types::ModelObject::Model,
+                    created: 1661989079,
+                    owned_by: "openai".to_string(),
+                }],
+            })
+            .unwrap(),
+        )
+        .create();
+
+    let resp = OpenAIApi::list_models(&client).await.unwrap();
+    assert_eq!(resp.data.len(), 1);
+    mock.assert_async().await;
+}

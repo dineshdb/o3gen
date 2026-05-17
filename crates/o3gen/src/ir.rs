@@ -8,6 +8,7 @@ use indexmap::IndexMap;
 pub struct ApiIr {
     pub types: IndexMap<String, TypeDefinitionIr>,
     pub operations: Vec<OperationIr>,
+    pub security_schemes: Vec<SecuritySchemeIr>,
 }
 
 #[derive(Debug, Clone)]
@@ -293,4 +294,23 @@ pub enum ParameterLocation {
 pub struct ResponseIr {
     pub code: StatusCode,
     pub type_info: Option<TypeIr>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SecuritySchemeIr {
+    HttpBearer,
+    HttpBasic,
+    ApiKey {
+        location: ApiKeyLocation,
+        field_name: String,
+    },
+    OAuth2,
+    OpenIdConnect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiKeyLocation {
+    Query,
+    Header,
+    Cookie,
 }

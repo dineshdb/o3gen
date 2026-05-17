@@ -6,6 +6,7 @@ use syn::Ident;
 
 use crate::emit;
 use crate::helpers::to_ident;
+use crate::ir::{ApiKeyLocation, SecuritySchemeIr};
 
 #[derive(Debug, Clone)]
 pub struct ParameterDetails {
@@ -111,8 +112,33 @@ pub fn generate_client_impl(
     trait_ident: &Ident,
     client_ident: &Ident,
     operations: &[OperationDetails],
+    security_schemes: &[SecuritySchemeIr],
 ) -> TokenStream {
     let mut impl_methods = TokenStream::new();
+
+    let mut auth_headers = TokenStream::new();
+    for scheme in security_schemes {
+        match scheme {
+            SecuritySchemeIr::HttpBearer => {
+                auth_headers.extend(quote! {
+                    if let Some(key) = &self.api_key {
+                        req = req.header("Authorization", &format!("Bearer {key}"));
+                    }
+                });
+            }
+            SecuritySchemeIr::ApiKey {
+                location: ApiKeyLocation::Header,
+                field_name,
+            } => {
+                auth_headers.extend(quote! {
+                    if let Some(key) = &self.api_key {
+                        req = req.header(#field_name, &key);
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
 
     for op in operations {
         let final_method_name = compute_method_name(&op.operation_id, trait_ident);
@@ -175,6 +201,7 @@ pub fn generate_client_impl(
         pub struct #client_ident {
             client: reqwest::Client,
             base_url: String,
+            api_key: Option<String>,
         }
 
         impl #client_ident {
@@ -185,7 +212,13 @@ pub fn generate_client_impl(
                         .build()
                         .unwrap_or_else(|_| reqwest::Client::new()),
                     base_url,
+                    api_key: None,
                 }
+            }
+
+            pub fn with_api_key(mut self, api_key: String) -> Self {
+                self.api_key = Some(api_key);
+                self
             }
 
             #[allow(dead_code)]
@@ -231,7 +264,7 @@ pub fn generate_client_impl(
                 let mut req = self.client.request(method, &url);
                 if let Some(q) = query { req = req.query(q); }
                 if let Some(b) = body { req = req.json(b); }
-
+                #auth_headers
                 let resp = req.send().await?;
                 if !resp.status().is_success() {
                     let status = resp.status();

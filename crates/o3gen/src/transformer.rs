@@ -4,15 +4,15 @@ use http::{Method, StatusCode};
 use indexmap::IndexMap;
 use openapiv3::{
     AnySchema, OpenAPI, ParameterData, ParameterSchemaOrContent, ReferenceOr, Schema, SchemaKind,
-    Type,
+    SecurityScheme, Type,
 };
 use std::collections::{HashMap, HashSet};
 
 use crate::config::Config;
 use crate::ir::{
-    AliasIr, AnyOfIr, ApiIr, EnumIr, EnumVariantIr, FieldIr, Name, NewtypeIr, OperationIr,
-    ParameterIr, ParameterLocation, PrimitiveType, ResponseIr, StructIr, TypeDefinitionIr, TypeIr,
-    ValidationIr, VariantIr,
+    AliasIr, AnyOfIr, ApiIr, ApiKeyLocation, EnumIr, EnumVariantIr, FieldIr, Name, NewtypeIr,
+    OperationIr, ParameterIr, ParameterLocation, PrimitiveType, ResponseIr, SecuritySchemeIr,
+    StructIr, TypeDefinitionIr, TypeIr, ValidationIr, VariantIr,
 };
 
 #[derive(Debug)]
@@ -59,12 +59,14 @@ impl<'a> Transformer<'a> {
 
         transformer.process_schemas()?;
         transformer.operations = transformer.process_paths()?;
+        let security_schemes = transformer.process_security_schemes();
 
         transformer.apply_ir_transformations();
 
         Ok(ApiIr {
             types: transformer.types,
             operations: transformer.operations,
+            security_schemes,
         })
     }
 
@@ -196,6 +198,46 @@ impl<'a> Transformer<'a> {
                 }
             }
         }
+    }
+
+    fn process_security_schemes(&self) -> Vec<SecuritySchemeIr> {
+        let Some(components) = &self.openapi.components else {
+            return Vec::new();
+        };
+
+        let mut schemes = Vec::new();
+        for (_, scheme_ref) in &components.security_schemes {
+            let ReferenceOr::Item(scheme) = scheme_ref else {
+                continue;
+            };
+            match scheme {
+                SecurityScheme::HTTP { scheme: s, .. } if s == "bearer" => {
+                    schemes.push(SecuritySchemeIr::HttpBearer);
+                }
+                SecurityScheme::HTTP { scheme: s, .. } if s == "basic" => {
+                    schemes.push(SecuritySchemeIr::HttpBasic);
+                }
+                SecurityScheme::APIKey { location, name, .. } => {
+                    let loc = match location {
+                        openapiv3::APIKeyLocation::Query => ApiKeyLocation::Query,
+                        openapiv3::APIKeyLocation::Header => ApiKeyLocation::Header,
+                        openapiv3::APIKeyLocation::Cookie => ApiKeyLocation::Cookie,
+                    };
+                    schemes.push(SecuritySchemeIr::ApiKey {
+                        location: loc,
+                        field_name: name.clone(),
+                    });
+                }
+                SecurityScheme::OAuth2 { .. } => {
+                    schemes.push(SecuritySchemeIr::OAuth2);
+                }
+                SecurityScheme::OpenIDConnect { .. } => {
+                    schemes.push(SecuritySchemeIr::OpenIdConnect);
+                }
+                SecurityScheme::HTTP { .. } => {}
+            }
+        }
+        schemes
     }
 
     fn process_schemas(&mut self) -> Result<(), String> {
