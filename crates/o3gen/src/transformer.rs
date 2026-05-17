@@ -1029,6 +1029,7 @@ impl<'a> Transformer<'a> {
                 "Serialize",
                 "Deserialize",
                 "PartialEq",
+                "Default",
                 "derive_more::Display",
                 "derive_more::From",
             ],
