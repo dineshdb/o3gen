@@ -261,18 +261,33 @@ pub fn generate_client_impl(
             where Q: serde::Serialize, R: serde::Serialize, T: serde::de::DeserializeOwned
             {
                 let url = format!("{}{}", self.base_url, path);
-                let mut req = self.client.request(method, &url);
-                if let Some(q) = query { req = req.query(q); }
-                if let Some(b) = body { req = req.json(b); }
-                #auth_headers
-                let resp = req.send().await?;
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let body = resp.text().await.unwrap_or_default();
-                    return Err(ApiError::Status { status, body });
+                // Retry transient connection failures (e.g. a busy local server
+                // refusing connections under bursty concurrency). Only connect-level
+                // errors are retried; status errors and delivered requests are not.
+                let mut last_connect_err: Option<reqwest::Error> = None;
+                for attempt in 0..3u32 {
+                    let mut req = self.client.request(method.clone(), &url);
+                    if let Some(q) = query { req = req.query(q); }
+                    if let Some(b) = body { req = req.json(b); }
+                    #auth_headers
+                    match req.send().await {
+                        Ok(resp) => {
+                            if !resp.status().is_success() {
+                                let status = resp.status();
+                                let body = resp.text().await.unwrap_or_default();
+                                return Err(ApiError::Status { status, body });
+                            }
+                            return Ok(resp.json::<T>().await?);
+                        }
+                        Err(e) if e.is_connect() && attempt < 2 => {
+                            last_connect_err = Some(e);
+                            tokio::time::sleep(std::time::Duration::from_millis(25 * (attempt + 1) as u64)).await;
+                            continue;
+                        }
+                        Err(e) => return Err(ApiError::Reqwest(e)),
+                    }
                 }
-
-                Ok(resp.json::<T>().await?)
+                Err(ApiError::Reqwest(last_connect_err.expect("retry loop ended without an error")))
             }
         }
 

@@ -21,7 +21,7 @@
 //!             .content(ChatCompletionRequestUserMessageContent::String(
 //!                 "Hello!".into(),
 //!             ))
-//!             .build()?
+//!             .build()
 //!             .into(),
 //!     ])
 //!     .build()?;
@@ -35,6 +35,48 @@
 //! # Streaming
 //!
 //! `OpenAIApiClient` also provides built-in SSE streaming for chat completions:
+//!
+//! # Structured extraction
+//!
+//! [`json()`](OpenAIApiClient::json) calls the chat completion endpoint, automatically
+//! prepends a system message with the JSON schema of `T`, and deserializes the response:
+//!
+//! ```no_run
+//! use schemars::JsonSchema;
+//! use serde::Deserialize;
+//! use o3gen_openai::OpenAIApiClient;
+//! use o3gen_openai::types::*;
+//!
+//! #[derive(Deserialize, JsonSchema)]
+//! struct Person {
+//!     name: String,
+//!     age: u8,
+//!     city: String,
+//! }
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), o3gen_openai::ApiError> {
+//! let client = OpenAIApiClient::new("https://api.openai.com/v1".into())
+//!     .with_api_key("sk-...".into());
+//!
+//! let body = ChatCompletionRequest::builder()
+//!     .model("gpt-4o".to_string())
+//!     .messages(vec![
+//!         ChatCompletionRequestUserMessage::builder()
+//!             .role(ChatCompletionRequestUserMessageRole::User)
+//!             .content(ChatCompletionRequestUserMessageContent::String(
+//!                 "John is 30 and lives in NYC".into(),
+//!             ))
+//!             .build()
+//!             .into(),
+//!     ])
+//!     .build()?;
+//!
+//! let person: Person = client.json(body).await?;
+//! println!("{} ({} from {})", person.name, person.age, person.city);
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! ```no_run
 //! use o3gen_openai::OpenAIApiClient;
@@ -54,7 +96,7 @@
 //!             .content(ChatCompletionRequestUserMessageContent::String(
 //!                 "Hello!".into(),
 //!             ))
-//!             .build()?
+//!             .build()
 //!             .into(),
 //!     ])
 //!     .build()?;
@@ -75,6 +117,7 @@
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
+use serde_json::Value;
 
 include!(concat!(env!("OUT_DIR"), "/openai.rs"));
 
@@ -96,13 +139,26 @@ impl OpenAIApiClient {
             obj.insert("stream".to_string(), serde_json::Value::Bool(true));
         }
 
-        let mut req = self.client.post(&url).json(&body);
-
-        if let Some(key) = &self.api_key {
-            req = req.header("Authorization", &format!("Bearer {key}"));
-        }
-
-        let resp = req.send().await?;
+        // Retry transient connection failures (a busy local server can refuse
+        // connections under bursty concurrency). Only connect-level errors are
+        // retried; once the stream is established mid-stream errors are not.
+        let mut retries = 0u32;
+        let resp = loop {
+            let mut req = self.client.post(&url).json(&body);
+            if let Some(key) = &self.api_key {
+                req = req.header("Authorization", &format!("Bearer {key}"));
+            }
+            match req.send().await {
+                Ok(r) => break r,
+                Err(e) if e.is_connect() && retries < 2 => {
+                    retries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(u64::from(retries) * 25))
+                        .await;
+                    continue;
+                }
+                Err(e) => return Err(ApiError::Reqwest(e)),
+            }
+        };
 
         let status = resp.status();
         if !status.is_success() {
@@ -134,7 +190,55 @@ impl OpenAIApiClient {
 
         Ok(mapped.boxed())
     }
+
+    /// Send a chat completion with a given JSON schema and return the parsed [`Value`].
+    ///
+    /// Prepends a system message instructing the model to respond in the schema format.
+    /// Useful for dynamic/untyped scenarios where the schema is not known at compile time.
+    /// Returns [`ApiError::Builder`] if the response has no content.
+    pub async fn get_json(
+        &self,
+        mut request: ChatCompletionRequest,
+        schema: &Value,
+    ) -> Result<Value> {
+        let schema_json = serde_json::to_string_pretty(schema).map_err(ApiError::Serde)?;
+
+        let system_msg = ChatCompletionRequestSystemMessage::builder()
+            .content(format!(
+                "You must respond with ONLY valid JSON. \
+                 Do NOT wrap the JSON in markdown code blocks or any other formatting.\n\
+                 Schema:\n{schema_json}"
+            ))
+            .role(ChatCompletionRequestSystemMessageRole::System)
+            .build();
+
+        request.messages.insert(0, system_msg.into());
+
+        let resp = self.create_chat_completion(request).await?;
+        let content = resp
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|c| c.message.content)
+            .ok_or_else(|| ApiError::Builder("No content in response".to_string()))?;
+        serde_json::from_str(&content).map_err(ApiError::Serde)
+    }
+
+    /// Call [`json_value`](Self::json_value) with the schema derived from `T`'s
+    /// [`JsonSchema`](schemars::JsonSchema) impl, then deserialize into `T`.
+    pub async fn json<T>(&self, request: ChatCompletionRequest) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema,
+    {
+        let schema = schemars::schema_for!(T);
+        let schema_value = serde_json::to_value(&schema).map_err(ApiError::Serde)?;
+        let value = self.get_json(request, &schema_value).await?;
+        serde_json::from_value(value).map_err(ApiError::Serde)
+    }
 }
 
 #[cfg(test)]
 pub mod tests;
+
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_helpers;

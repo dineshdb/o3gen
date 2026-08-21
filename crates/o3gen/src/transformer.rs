@@ -712,6 +712,14 @@ impl<'a> Transformer<'a> {
                         max: st.maximum,
                     });
                 }
+                SchemaKind::Type(Type::Array(at))
+                    if at.min_items.is_some() || at.max_items.is_some() =>
+                {
+                    v.push(ValidationIr::Length {
+                        min: at.min_items.map(|l| l as u64),
+                        max: at.max_items.map(|l| l as u64),
+                    });
+                }
                 _ => {}
             }
         }
@@ -808,6 +816,10 @@ impl<'a> Transformer<'a> {
         )
     }
 
+    fn get_alias_derives(&self, name: &str) -> Vec<String> {
+        self.merge_derives(name, &[])
+    }
+
     fn find_common_prefix(values: &[String]) -> Option<String> {
         let mut prefix = values.first()?.clone();
         for v in values.get(1..).unwrap_or_default() {
@@ -846,6 +858,7 @@ impl TypeDefinitionIr {
                         name: ir_name,
                         target: TypeIr::Value,
                         description,
+                        derives: xf.get_alias_derives(name),
                     }));
                 }
                 StructIr::from_object(name, obj, description, ir_name, xf).map(Self::Struct)
@@ -884,6 +897,7 @@ impl TypeDefinitionIr {
                     name: ir_name,
                     target: TypeIr::Array(Box::new(target)),
                     description,
+                    derives: xf.get_alias_derives(name),
                 }))
             }
             SchemaKind::Any(any) if !any.properties.is_empty() => {
@@ -895,6 +909,7 @@ impl TypeDefinitionIr {
                     name: ir_name,
                     target,
                     description,
+                    derives: xf.get_alias_derives(name),
                 }))
             }
         }

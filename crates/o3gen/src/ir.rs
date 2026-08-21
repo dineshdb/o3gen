@@ -20,47 +20,169 @@ pub enum TypeDefinitionIr {
     Newtype(NewtypeIr),
 }
 
-impl TypeDefinitionIr {
-    #[must_use]
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Struct(s) => s.name.as_str(),
-            Self::Enum(e) => e.name.as_str(),
-            Self::Alias(a) => a.name.as_str(),
-            Self::AnyOf(a) => a.name.as_str(),
-            Self::Newtype(n) => n.name.as_str(),
+pub trait IrType {
+    fn name(&self) -> &str;
+    fn set_name(&mut self, name: String);
+    fn is_generated(&self) -> bool;
+    fn description(&self) -> Option<&str>;
+    fn update_references(&mut self, renames: &HashMap<String, String>);
+    fn derives(&self) -> &[String];
+    fn derives_mut(&mut self) -> &mut Vec<String>;
+
+    fn add_derive(&mut self, trait_name: String) {
+        let derives = self.derives_mut();
+        if !derives.contains(&trait_name) {
+            derives.push(trait_name);
         }
     }
 
-    pub fn set_name(&mut self, name: String) {
+    fn has_derive(&self, trait_name: &str) -> bool {
+        self.derives().iter().any(|d| d == trait_name)
+    }
+
+    fn remove_derive(&mut self, trait_name: &str) {
+        self.derives_mut().retain(|d| d != trait_name);
+    }
+
+    fn can_derive_default(&self) -> bool {
+        true
+    }
+
+    fn has_custom_default(&self) -> bool {
+        false
+    }
+
+    fn should_derive_default(&self) -> bool {
+        self.can_derive_default() && !self.has_custom_default()
+    }
+
+    fn should_derive(&self, trait_name: &str) -> bool {
+        if trait_name == "Default" {
+            return self.should_derive_default();
+        }
+        true
+    }
+}
+
+impl IrType for TypeDefinitionIr {
+    fn name(&self) -> &str {
         match self {
-            Self::Struct(s) => s.name.set_string(name),
-            Self::Enum(e) => e.name.set_string(name),
-            Self::Alias(a) => a.name.set_string(name),
-            Self::AnyOf(a) => a.name.set_string(name),
-            Self::Newtype(n) => n.name.set_string(name),
+            Self::Struct(s) => s.name(),
+            Self::Enum(e) => e.name(),
+            Self::Alias(a) => a.name(),
+            Self::AnyOf(a) => a.name(),
+            Self::Newtype(n) => n.name(),
         }
     }
 
-    #[must_use]
-    pub fn is_generated(&self) -> bool {
+    fn set_name(&mut self, name: String) {
         match self {
-            Self::Struct(s) => s.name.is_generated(),
-            Self::Enum(e) => e.name.is_generated(),
-            Self::Alias(a) => a.name.is_generated(),
-            Self::AnyOf(a) => a.name.is_generated(),
-            Self::Newtype(n) => n.name.is_generated(),
+            Self::Struct(s) => s.set_name(name),
+            Self::Enum(e) => e.set_name(name),
+            Self::Alias(a) => a.set_name(name),
+            Self::AnyOf(a) => a.set_name(name),
+            Self::Newtype(n) => n.set_name(name),
         }
     }
 
-    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+    fn is_generated(&self) -> bool {
+        match self {
+            Self::Struct(s) => s.is_generated(),
+            Self::Enum(e) => e.is_generated(),
+            Self::Alias(a) => a.is_generated(),
+            Self::AnyOf(a) => a.is_generated(),
+            Self::Newtype(n) => n.is_generated(),
+        }
+    }
+
+    fn description(&self) -> Option<&str> {
+        match self {
+            Self::Struct(s) => s.description(),
+            Self::Enum(e) => e.description(),
+            Self::Alias(a) => a.description(),
+            Self::AnyOf(a) => a.description(),
+            Self::Newtype(n) => n.description(),
+        }
+    }
+
+    fn update_references(&mut self, renames: &HashMap<String, String>) {
         match self {
             Self::Struct(s) => s.update_references(renames),
-            Self::Enum(_) => {}
+            Self::Enum(e) => e.update_references(renames),
             Self::Alias(a) => a.update_references(renames),
             Self::AnyOf(a) => a.update_references(renames),
             Self::Newtype(n) => n.update_references(renames),
         }
+    }
+
+    fn derives(&self) -> &[String] {
+        match self {
+            Self::Struct(s) => s.derives(),
+            Self::Enum(e) => e.derives(),
+            Self::Alias(a) => a.derives(),
+            Self::AnyOf(a) => a.derives(),
+            Self::Newtype(n) => n.derives(),
+        }
+    }
+
+    fn derives_mut(&mut self) -> &mut Vec<String> {
+        match self {
+            Self::Struct(s) => s.derives_mut(),
+            Self::Enum(e) => e.derives_mut(),
+            Self::Alias(a) => a.derives_mut(),
+            Self::AnyOf(a) => a.derives_mut(),
+            Self::Newtype(n) => n.derives_mut(),
+        }
+    }
+
+    fn can_derive_default(&self) -> bool {
+        match self {
+            Self::Struct(s) => s.can_derive_default(),
+            Self::Enum(e) => e.can_derive_default(),
+            Self::Alias(a) => a.can_derive_default(),
+            Self::AnyOf(a) => a.can_derive_default(),
+            Self::Newtype(n) => n.can_derive_default(),
+        }
+    }
+
+    fn has_custom_default(&self) -> bool {
+        match self {
+            Self::Struct(s) => s.has_custom_default(),
+            Self::Enum(e) => e.has_custom_default(),
+            Self::Alias(a) => a.has_custom_default(),
+            Self::AnyOf(a) => a.has_custom_default(),
+            Self::Newtype(n) => n.has_custom_default(),
+        }
+    }
+
+    fn should_derive(&self, trait_name: &str) -> bool {
+        match self {
+            Self::Struct(s) => s.should_derive(trait_name),
+            Self::Enum(e) => e.should_derive(trait_name),
+            Self::Alias(a) => a.should_derive(trait_name),
+            Self::AnyOf(a) => a.should_derive(trait_name),
+            Self::Newtype(n) => n.should_derive(trait_name),
+        }
+    }
+}
+
+impl TypeDefinitionIr {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        IrType::name(self)
+    }
+
+    pub fn set_name(&mut self, name: String) {
+        IrType::set_name(self, name);
+    }
+
+    #[must_use]
+    pub fn is_generated(&self) -> bool {
+        IrType::is_generated(self)
+    }
+
+    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+        IrType::update_references(self, renames);
     }
 }
 
@@ -106,6 +228,25 @@ pub struct StructIr {
 }
 
 impl StructIr {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn set_name(&mut self, name: String) {
+        self.name.set_string(name);
+    }
+
+    #[must_use]
+    pub fn is_generated(&self) -> bool {
+        self.name.is_generated()
+    }
+
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
     pub fn update_references(&mut self, renames: &HashMap<String, String>) {
         for field in &mut self.fields {
             field.type_info.update_reference(renames);
@@ -113,6 +254,66 @@ impl StructIr {
         if let Some(ap) = &mut self.additional_properties_type {
             ap.update_reference(renames);
         }
+    }
+
+    #[must_use]
+    pub fn derives(&self) -> &[String] {
+        &self.derives
+    }
+
+    pub fn derives_mut(&mut self) -> &mut Vec<String> {
+        &mut self.derives
+    }
+
+    #[must_use]
+    pub fn can_derive_default(&self) -> bool {
+        self.fields
+            .iter()
+            .all(|f| f.type_info.can_derive_default() || !f.required)
+    }
+
+    #[must_use]
+    pub fn has_validation(&self) -> bool {
+        self.fields.iter().any(|f| !f.validation.is_empty())
+    }
+
+    #[must_use]
+    pub fn is_infallible(&self) -> bool {
+        !self.has_validation() && self.fields.iter().all(|f| !f.required)
+    }
+}
+
+impl IrType for StructIr {
+    fn name(&self) -> &str {
+        self.name()
+    }
+
+    fn set_name(&mut self, name: String) {
+        self.set_name(name);
+    }
+
+    fn is_generated(&self) -> bool {
+        self.is_generated()
+    }
+
+    fn description(&self) -> Option<&str> {
+        self.description()
+    }
+
+    fn update_references(&mut self, renames: &HashMap<String, String>) {
+        self.update_references(renames);
+    }
+
+    fn derives(&self) -> &[String] {
+        self.derives()
+    }
+
+    fn derives_mut(&mut self) -> &mut Vec<String> {
+        self.derives_mut()
+    }
+
+    fn can_derive_default(&self) -> bool {
+        self.can_derive_default()
     }
 }
 
@@ -125,6 +326,34 @@ pub struct EnumIr {
     pub description: Option<String>,
 }
 
+impl IrType for EnumIr {
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    fn set_name(&mut self, name: String) {
+        self.name.set_string(name);
+    }
+
+    fn is_generated(&self) -> bool {
+        self.name.is_generated()
+    }
+
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    fn update_references(&mut self, _renames: &HashMap<String, String>) {}
+
+    fn derives(&self) -> &[String] {
+        &self.derives
+    }
+
+    fn derives_mut(&mut self) -> &mut Vec<String> {
+        &mut self.derives
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NewtypeIr {
     pub name: Name,
@@ -133,9 +362,37 @@ pub struct NewtypeIr {
     pub description: Option<String>,
 }
 
-impl NewtypeIr {
-    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+impl IrType for NewtypeIr {
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    fn set_name(&mut self, name: String) {
+        self.name.set_string(name);
+    }
+
+    fn is_generated(&self) -> bool {
+        self.name.is_generated()
+    }
+
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    fn update_references(&mut self, renames: &HashMap<String, String>) {
         self.target.update_reference(renames);
+    }
+
+    fn derives(&self) -> &[String] {
+        &self.derives
+    }
+
+    fn derives_mut(&mut self) -> &mut Vec<String> {
+        &mut self.derives
+    }
+
+    fn can_derive_default(&self) -> bool {
+        self.target.can_derive_default()
     }
 }
 
@@ -189,11 +446,36 @@ pub struct AliasIr {
     pub name: Name,
     pub target: TypeIr,
     pub description: Option<String>,
+    pub derives: Vec<String>,
 }
 
-impl AliasIr {
-    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+impl IrType for AliasIr {
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    fn set_name(&mut self, name: String) {
+        self.name.set_string(name);
+    }
+
+    fn is_generated(&self) -> bool {
+        self.name.is_generated()
+    }
+
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    fn update_references(&mut self, renames: &HashMap<String, String>) {
         self.target.update_reference(renames);
+    }
+
+    fn derives(&self) -> &[String] {
+        &self.derives
+    }
+
+    fn derives_mut(&mut self) -> &mut Vec<String> {
+        &mut self.derives
     }
 }
 
@@ -205,11 +487,46 @@ pub struct AnyOfIr {
     pub description: Option<String>,
 }
 
-impl AnyOfIr {
-    pub fn update_references(&mut self, renames: &HashMap<String, String>) {
+impl IrType for AnyOfIr {
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    fn set_name(&mut self, name: String) {
+        self.name.set_string(name);
+    }
+
+    fn is_generated(&self) -> bool {
+        self.name.is_generated()
+    }
+
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    fn update_references(&mut self, renames: &HashMap<String, String>) {
         for variant in &mut self.variants {
             variant.type_info.update_reference(renames);
         }
+    }
+
+    fn derives(&self) -> &[String] {
+        &self.derives
+    }
+
+    fn derives_mut(&mut self) -> &mut Vec<String> {
+        &mut self.derives
+    }
+
+    fn has_custom_default(&self) -> bool {
+        true
+    }
+
+    fn should_derive(&self, trait_name: &str) -> bool {
+        if trait_name == "Default" || trait_name == "derive_more::From" {
+            return false;
+        }
+        true
     }
 }
 
@@ -236,6 +553,18 @@ impl From<PrimitiveType> for TypeIr {
 }
 
 impl TypeIr {
+    #[must_use]
+    pub fn can_derive_default(&self) -> bool {
+        match self {
+            Self::Reference(_)
+            | Self::Enum(_)
+            | Self::Primitive(_)
+            | Self::Array(_)
+            | Self::Map(_)
+            | Self::Value => true,
+        }
+    }
+
     pub fn update_reference(&mut self, renames: &HashMap<String, String>) {
         match self {
             Self::Reference(name) | Self::Enum(name) => {

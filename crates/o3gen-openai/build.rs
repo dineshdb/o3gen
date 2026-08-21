@@ -7,6 +7,7 @@ fn main() {
         .deny_unknown_fields(false)
         .rename("CreateChatCompletionRequest", "ChatCompletionRequest")
         .rename("ChatCompletionRequestModelVariant1", "Upstream")
+        .rename("CreateCompletionRequestModelVariant1", "ModelId")
         .rename("ChatCompletionMessageToolCallFunction", "ToolCallFunction")
         .rename("ChatCompletionMessageToolCall", "ToolCall")
         .write_to_out_dir("openai.rs")

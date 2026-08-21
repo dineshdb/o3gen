@@ -21,11 +21,9 @@ fn tool_def(name: &str, description: &str) -> ChatCompletionTool {
                 .name(name.to_string())
                 .description(description.to_string())
                 .parameters(serde_json::json!({}))
-                .build()
-                .unwrap(),
+                .build(),
         )
         .build()
-        .unwrap()
 }
 
 fn tools() -> Vec<ChatCompletionTool> {
@@ -67,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ChatCompletionRequestSystemMessage::builder()
             .content(SYSTEM)
             .role(ChatCompletionRequestSystemMessageRole::System)
-            .build()?
+            .build()
             .into(),
     ];
 
@@ -90,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ChatCompletionRequestUserMessage::builder()
                 .role(ChatCompletionRequestUserMessageRole::User)
                 .content(ChatCompletionRequestUserMessageContent::String(input))
-                .build()?
+                .build()
                 .into(),
         );
 
@@ -165,11 +163,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ToolCallFunction::builder()
                                     .name(t.name)
                                     .arguments(t.arguments)
-                                    .build()?,
+                                    .build(),
                             )
                             .build()
                     })
-                    .collect::<std::result::Result<Vec<_>, _>>()?
+                    .collect::<Vec<_>>()
             };
 
             {
@@ -181,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !tool_calls.is_empty() {
                     b.tool_calls(tool_calls.clone());
                 }
-                msgs.push(b.build()?.into());
+                msgs.push(b.build().into());
             }
 
             match finish_reason {
@@ -190,7 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     for tc in &tool_calls {
                         let name = tc.function.name.clone();
                         let args = tc.function.arguments.clone();
-                        print!("\n  └─ tool: {name}({args})\n");
+                        print!(
+                            "\n  └─ {} tool: {name}({args})\n",
+                            tc.id.as_deref().unwrap_or("?")
+                        );
 
                         let result = match name.as_str() {
                             "ls" => exec_tool(
@@ -220,11 +221,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         {
                             let mut b = ChatCompletionRequestToolMessage::builder();
                             b.role(ChatCompletionRequestToolMessageRole::Tool);
-                            b.tool_call_id(tc.id.clone());
+                            b.tool_call_id(tc.id.clone().unwrap_or_default());
                             if !result_str.is_empty() {
                                 b.content(result_str);
                             }
-                            msgs.push(b.build()?.into());
+                            msgs.push(b.build().into());
                         }
                     }
                 }

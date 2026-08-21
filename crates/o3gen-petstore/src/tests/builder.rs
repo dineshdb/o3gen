@@ -1,14 +1,14 @@
-use crate::types;
 use crate::types::{Pet, PetStatus, Species};
 use chrono::Utc;
 
 #[test]
-fn test_rename_category_to_pet_category() {
-    // This verifies that `Category` was successfully renamed to `PetCategory`
-    let _category = types::PetCategory {
-        id: "1".to_string(),
-        name: "Dogs".to_string(),
-    };
+fn test_pet_category_builder_no_unwrap() {
+    use crate::types::PetCategory;
+    // PetCategory has no validation, so build() should return PetCategory directly
+    let category = PetCategory::builder().id("1").name("Dogs").build();
+
+    assert_eq!(category.id, "1");
+    assert_eq!(category.name, "Dogs");
 }
 
 #[test]

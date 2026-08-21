@@ -4,8 +4,8 @@ use syn::Ident;
 
 use crate::helpers::to_ident;
 use crate::ir::{
-    AliasIr, AnyOfIr, EnumIr, FieldIr, NewtypeIr, PrimitiveType, StructIr, TypeDefinitionIr,
-    TypeIr, ValidationIr,
+    AliasIr, AnyOfIr, EnumIr, FieldIr, IrType, NewtypeIr, PrimitiveType, StructIr,
+    TypeDefinitionIr, TypeIr, ValidationIr,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -44,6 +44,13 @@ pub fn emit_derives(derives: &[String]) -> TokenStream {
         })
         .collect();
     quote! { #[derive(#(#paths),*)] }
+}
+
+#[must_use]
+pub fn emit_derives_for<T: IrType>(ir: &T) -> TokenStream {
+    let mut derives = ir.derives().to_vec();
+    derives.retain(|d| ir.should_derive(d));
+    emit_derives(&derives)
 }
 
 #[must_use]
@@ -207,7 +214,7 @@ impl StructIr {
     pub fn emit(&self, ctx: EmitContext) -> TokenStream {
         let name = to_ident(self.name.as_str());
         let builder_name = to_ident(&format!("{}Builder", self.name.as_str()));
-        let derives = emit_derives(&self.derives);
+        let derives = emit_derives_for(self);
         let doc_attr = emit_doc(self.description.as_deref());
         let fields: Vec<TokenStream> = self.fields.iter().map(FieldIr::emit).collect();
 
@@ -229,23 +236,8 @@ impl StructIr {
             quote! {}
         };
 
-        quote! {
-            #doc_attr
-            #derives
-            #deny_unknown
-            #[builder(setter(into, strip_option), build_fn(name = "build_inner", vis = "pub(crate)"))]
-            pub struct #name {
-                #(#fields)*
-                #additional_properties_field
-            }
-
-            impl #name {
-                pub fn builder() -> #builder_name {
-                    #builder_name::default()
-                }
-            }
-
-            impl #builder_name {
+        let build_method = if self.has_validation() {
+            quote! {
                 pub fn build(&self) -> Result<#name> {
                     let obj = self.build_inner().map_err(|e| ApiError::Builder(e.to_string()))?;
                     obj.validate().map_err(|e| {
@@ -286,6 +278,33 @@ impl StructIr {
                     Ok(obj)
                 }
             }
+        } else {
+            quote! {
+                pub fn build(&self) -> #name {
+                    self.build_inner().expect("Required fields must be set")
+                }
+            }
+        };
+
+        quote! {
+            #doc_attr
+            #derives
+            #deny_unknown
+            #[builder(setter(into, strip_option), build_fn(name = "build_inner", vis = "pub(crate)"))]
+            pub struct #name {
+                #(#fields)*
+                #additional_properties_field
+            }
+
+            impl #name {
+                pub fn builder() -> #builder_name {
+                    #builder_name::default()
+                }
+            }
+
+            impl #builder_name {
+                #build_method
+            }
         }
     }
 }
@@ -295,7 +314,7 @@ impl EnumIr {
     pub fn emit(&self) -> TokenStream {
         let name = to_ident(self.name.as_str());
         let name_str = self.name.as_str();
-        let derives = emit_derives(&self.derives);
+        let derives = emit_derives_for(self);
         let doc_attr = emit_doc(self.description.as_deref());
         let rename_all_attr = self
             .rename_all
@@ -385,7 +404,7 @@ impl NewtypeIr {
     #[must_use]
     pub fn emit(&self) -> TokenStream {
         let name = to_ident(self.name.as_str());
-        let derives = emit_derives(&self.derives);
+        let derives = emit_derives_for(self);
         let target = self.target.to_tokens(true);
         let doc_attr = emit_doc(self.description.as_deref());
         let from_str = if matches!(self.target, TypeIr::Primitive(PrimitiveType::String)) {
@@ -412,9 +431,7 @@ impl AnyOfIr {
     #[must_use]
     pub fn emit(&self) -> TokenStream {
         let name = to_ident(self.name.as_str());
-        let mut derives_list = self.derives.clone();
-        derives_list.retain(|d| d != "Default" && d != "derive_more::From");
-        let derives = emit_derives(&derives_list);
+        let derives = emit_derives_for(self);
         let doc_attr = emit_doc(self.description.as_deref());
 
         let variants = self.variants.iter().map(|v| {
