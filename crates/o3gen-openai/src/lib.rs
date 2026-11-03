@@ -114,13 +114,21 @@
 //! # }
 //! ```
 
-use eventsource_stream::Eventsource;
-use futures_util::StreamExt;
-use futures_util::stream::BoxStream;
 use serde_json::Value;
+
+#[cfg(feature = "reqwest")]
+use eventsource_stream::Eventsource;
+#[cfg(feature = "reqwest")]
+use futures_util::StreamExt;
+#[cfg(feature = "reqwest")]
+use futures_util::stream::BoxStream;
 
 include!(concat!(env!("OUT_DIR"), "/openai.rs"));
 
+/// The SSE streaming face rides reqwest's byte streams; a
+/// transport-injected build (no reqwest — a wasm component, say)
+/// answers chat completions through the trait instead.
+#[cfg(feature = "reqwest")]
 impl OpenAIApiClient {
     /// Stream chat completion chunks via SSE (stream=true).
     ///
@@ -164,7 +172,7 @@ impl OpenAIApiClient {
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
             return Err(ApiError::Status {
-                status,
+                status: status.as_u16(),
                 body: body_text,
             });
         }
@@ -190,7 +198,9 @@ impl OpenAIApiClient {
 
         Ok(mapped.boxed())
     }
+}
 
+impl OpenAIApiClient {
     /// Send a chat completion with a given JSON schema and return the parsed [`Value`].
     ///
     /// Prepends a system message instructing the model to respond in the schema format.
