@@ -323,7 +323,7 @@ async fn test_http_unauthorized() {
     let err = OpenAIApi::list_models(&client).await.unwrap_err();
     match err {
         crate::ApiError::Status { status, .. } => {
-            assert_eq!(status, reqwest::StatusCode::UNAUTHORIZED)
+            assert_eq!(status, 401)
         }
         other => panic!("expected Status error, got: {other:?}"),
     }
@@ -342,7 +342,7 @@ async fn test_http_rate_limited() {
     let err = OpenAIApi::list_models(&client).await.unwrap_err();
     match err {
         crate::ApiError::Status { status, .. } => {
-            assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS)
+            assert_eq!(status, 429)
         }
         other => panic!("expected Status error, got: {other:?}"),
     }
@@ -357,7 +357,7 @@ async fn test_http_not_found() {
     let err = OpenAIApi::list_models(&client).await.unwrap_err();
     match err {
         crate::ApiError::Status { status, .. } => {
-            assert_eq!(status, reqwest::StatusCode::NOT_FOUND)
+            assert_eq!(status, 404)
         }
         other => panic!("expected Status error, got: {other:?}"),
     }
@@ -578,4 +578,74 @@ async fn test_json_extraction_invalid_json() {
     );
 
     m.assert_async().await;
+}
+
+// ── the injected Transport path (no reqwest in the call at all) ──────
+
+struct FixedTransport {
+    status: u16,
+    body: Vec<u8>,
+    seen: std::sync::Mutex<Option<crate::TransportRequest>>,
+}
+
+impl crate::Transport for FixedTransport {
+    fn execute(&self, request: crate::TransportRequest) -> crate::TransportFuture {
+        *self.seen.lock().unwrap() = Some(request);
+        let response = crate::TransportResponse {
+            status: self.status,
+            body: self.body.clone(),
+        };
+        Box::pin(async move { Ok(response) })
+    }
+}
+
+#[tokio::test]
+async fn test_transport_injected_call() {
+    let transport = std::sync::Arc::new(FixedTransport {
+        status: 200,
+        body: br#"{"object":"list","data":[{"id":"gpt-4o","object":"model","created":1700000000,"owned_by":"openai"}]}"#.to_vec(),
+        seen: std::sync::Mutex::new(None),
+    });
+    let client = crate::OpenAIApiClient::new("http://transport.test/v1".into())
+        .with_api_key("sk-test".into())
+        .with_transport(transport.clone());
+
+    let resp = crate::OpenAIApi::list_models(&client).await.unwrap();
+    assert_eq!(resp.data.len(), 1);
+    assert_eq!(resp.data[0].id, "gpt-4o");
+
+    let seen = transport
+        .seen
+        .lock()
+        .unwrap()
+        .take()
+        .expect("no request seen");
+    assert_eq!(seen.method, "GET");
+    assert_eq!(seen.url, "http://transport.test/v1/models");
+    assert!(
+        seen.headers
+            .iter()
+            .any(|(k, v)| k == "Authorization" && v == "Bearer sk-test"),
+        "auth header must ride the transport request: {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_transport_status_error() {
+    let transport = std::sync::Arc::new(FixedTransport {
+        status: 401,
+        body: br#"{"error":{"message":"bad key"}}"#.to_vec(),
+        seen: std::sync::Mutex::new(None),
+    });
+    let client =
+        crate::OpenAIApiClient::new("http://transport.test/v1".into()).with_transport(transport);
+
+    let err = crate::OpenAIApi::list_models(&client).await.unwrap_err();
+    match err {
+        crate::ApiError::Status { status, body } => {
+            assert_eq!(status, 401);
+            assert!(body.contains("bad key"));
+        }
+        other => panic!("expected Status error, got: {other:?}"),
+    }
 }

@@ -110,10 +110,13 @@ impl Generator {
 
             #[derive(Debug, Error)]
             pub enum ApiError {
+                #[cfg(feature = "reqwest")]
                 #[error("Request error: {0}")]
                 Reqwest(#[from] reqwest::Error),
+                #[error("Transport error: {0}")]
+                Transport(String),
                 #[error("Status error: {status} - {body}")]
-                Status { status: reqwest::StatusCode, body: String },
+                Status { status: u16, body: String },
                 #[error("Serialization error: {0}")]
                 Serde(#[from] serde_json::Error),
                 #[error("Validation error: {0}")]
