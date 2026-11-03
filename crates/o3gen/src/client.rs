@@ -221,20 +221,71 @@ pub fn generate_client_impl(
         /// The transport's pending exchange: a boxed future (a trait
         /// returning `impl Future` is not dyn-compatible, and the
         /// client holds the transport as `Arc<dyn Transport>`).
-        pub type TransportFuture = std::pin::Pin<
+        pub type TransportFuture<T> = std::pin::Pin<
             Box<
-                dyn std::future::Future<Output = std::result::Result<TransportResponse, String>>
+                dyn std::future::Future<Output = std::result::Result<T, String>>
                     + Send
                     + 'static,
             >,
         >;
 
+        /// One streaming body: `next_chunk` answers the bytes that
+        /// arrived (`None` = the body is finished). A chunk answers as
+        /// soon as SOMETHING arrived — the transport never waits to
+        /// fill a buffer, and the caller decides what buffering (if
+        /// any) happens on top.
+        pub trait TransportBody: Send {
+            fn next_chunk(&mut self) -> TransportFuture<Option<Vec<u8>>>;
+        }
+
+        /// The streaming exchange's answer: the status, the headers,
+        /// and the body STILL STREAMING (never held whole).
+        pub struct TransportStreamResponse {
+            pub status: u16,
+            pub headers: Vec<(String, String)>,
+            pub body: Box<dyn TransportBody>,
+        }
+
+        /// A buffered body wrapped in the streaming face — the
+        /// streaming answer of a transport whose exchange was
+        /// buffered ([`Transport::execute_into_stream`]).
+        pub struct BufferedTransportBody(pub Vec<u8>);
+
+        impl TransportBody for BufferedTransportBody {
+            fn next_chunk(&mut self) -> TransportFuture<Option<Vec<u8>>> {
+                let chunk = std::mem::take(&mut self.0);
+                Box::pin(async move {
+                    Ok::<Option<Vec<u8>>, String>(if chunk.is_empty() { None } else { Some(chunk) })
+                })
+            }
+        }
+
+        /// Wrap a buffered exchange as a streaming answer (the
+        /// `execute_streaming` body of a transport that only buffers):
+        /// one chunk, then done.
+        pub fn buffered_as_stream(response: TransportResponse) -> TransportStreamResponse {
+            TransportStreamResponse {
+                status: response.status,
+                headers: Vec::new(),
+                body: Box::new(BufferedTransportBody(response.body)),
+            }
+        }
+
         /// The pluggable HTTP backend. The default is reqwest (the
         /// `reqwest` feature); a target reqwest cannot serve — a wasm
         /// component, say — injects its own with
-        /// [`#client_ident::with_transport`].
+        /// [`#client_ident::with_transport`]. TWO faces, both
+        /// required: `execute` is the buffered contract (the generated
+        /// API methods), `execute_streaming` is the streaming one (a
+        /// body that answers chunk by chunk — never held whole). A
+        /// transport that can only buffer answers `execute_streaming`
+        /// with [`buffered_as_stream`] over its `execute`.
         pub trait Transport: Send + Sync + 'static {
-            fn execute(&self, request: TransportRequest) -> TransportFuture;
+            fn execute(&self, request: TransportRequest) -> TransportFuture<TransportResponse>;
+            fn execute_streaming(
+                &self,
+                request: TransportRequest,
+            ) -> TransportFuture<TransportStreamResponse>;
         }
 
         pub struct #client_ident {

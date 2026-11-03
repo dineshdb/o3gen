@@ -589,13 +589,25 @@ struct FixedTransport {
 }
 
 impl crate::Transport for FixedTransport {
-    fn execute(&self, request: crate::TransportRequest) -> crate::TransportFuture {
+    fn execute(&self, request: crate::TransportRequest) -> crate::TransportFuture<crate::TransportResponse> {
         *self.seen.lock().unwrap() = Some(request);
         let response = crate::TransportResponse {
             status: self.status,
             body: self.body.clone(),
         };
         Box::pin(async move { Ok(response) })
+    }
+
+    fn execute_streaming(
+        &self,
+        request: crate::TransportRequest,
+    ) -> crate::TransportFuture<crate::TransportStreamResponse> {
+        *self.seen.lock().unwrap() = Some(request);
+        let response = crate::TransportResponse {
+            status: self.status,
+            body: self.body.clone(),
+        };
+        Box::pin(async move { Ok(crate::buffered_as_stream(response)) })
     }
 }
 
@@ -648,4 +660,79 @@ async fn test_transport_status_error() {
         }
         other => panic!("expected Status error, got: {other:?}"),
     }
+}
+
+// ── the streaming face (execute_streaming) ───────────────────────────
+
+struct ChunkedTransport {
+    status: u16,
+    chunks: std::collections::VecDeque<Vec<u8>>,
+}
+
+impl crate::Transport for ChunkedTransport {
+    fn execute(&self, _request: crate::TransportRequest) -> crate::TransportFuture<crate::TransportResponse> {
+        let body = self.chunks.iter().flatten().cloned().collect();
+        let response = crate::TransportResponse { status: self.status, body };
+        Box::pin(async move { Ok(response) })
+    }
+
+    fn execute_streaming(
+        &self,
+        _request: crate::TransportRequest,
+    ) -> crate::TransportFuture<crate::TransportStreamResponse> {
+        let status = self.status;
+        let chunks = self.chunks.clone();
+        Box::pin(async move {
+            struct ChunkedBody(std::collections::VecDeque<Vec<u8>>);
+            impl crate::TransportBody for ChunkedBody {
+                fn next_chunk(&mut self) -> crate::TransportFuture<Option<Vec<u8>>> {
+                    let chunk = self.0.pop_front();
+                    Box::pin(async move { Ok::<_, String>(chunk) })
+                }
+            }
+            Ok(crate::TransportStreamResponse {
+                status,
+                headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+                body: Box::new(ChunkedBody(chunks)),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_transport_streaming_chunks() {
+    let transport = ChunkedTransport {
+        status: 200,
+        chunks: [
+            b"data: {\"a\":1}".to_vec(),
+            b"\n\ndata: ".to_vec(),
+            b"{\"a\":2}\n\n".to_vec(),
+        ]
+        .into(),
+    };
+    let mut response = crate::Transport::execute_streaming(&transport, crate::TransportRequest {
+            method: "POST".into(),
+            url: "http://transport.test/v1/chat/completions".into(),
+            headers: vec![],
+            body: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response
+            .headers
+            .iter()
+            .find(|(k, _)| k == "content-type")
+            .map(|(_, v)| v.as_str()),
+        Some("text/event-stream")
+    );
+    let mut assembled = Vec::new();
+    let mut chunks = 0;
+    while let Some(chunk) = response.body.next_chunk().await.unwrap() {
+        chunks += 1;
+        assembled.extend_from_slice(&chunk);
+    }
+    assert_eq!(chunks, 3, "each upstream chunk answers as its own chunk");
+    assert_eq!(assembled, b"data: {\"a\":1}\n\ndata: {\"a\":2}\n\n");
 }
