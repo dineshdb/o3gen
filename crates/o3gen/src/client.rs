@@ -210,14 +210,6 @@ pub fn generate_client_impl(
             pub body: Option<Vec<u8>>,
         }
 
-        /// The transport's answer: a status code and the raw body. The
-        /// client does the JSON decoding.
-        #[derive(Debug, Clone)]
-        pub struct TransportResponse {
-            pub status: u16,
-            pub body: Vec<u8>,
-        }
-
         /// The transport's pending exchange: a boxed future (a trait
         /// returning `impl Future` is not dyn-compatible, and the
         /// client holds the transport as `Arc<dyn Transport>`).
@@ -246,42 +238,28 @@ pub fn generate_client_impl(
             pub body: Box<dyn TransportBody>,
         }
 
-        /// A buffered body wrapped in the streaming face — the
-        /// streaming answer of a transport whose exchange was
-        /// buffered ([`Transport::execute_into_stream`]).
-        pub struct BufferedTransportBody(pub Vec<u8>);
-
-        impl TransportBody for BufferedTransportBody {
-            fn next_chunk(&mut self) -> TransportFuture<Option<Vec<u8>>> {
-                let chunk = std::mem::take(&mut self.0);
-                Box::pin(async move {
-                    Ok::<Option<Vec<u8>>, String>(if chunk.is_empty() { None } else { Some(chunk) })
-                })
+        /// A whole-body read over a streaming body — the buffering an
+        /// application does when IT wants the bytes whole (the
+        /// generated API methods use this internally; a passthrough
+        /// never calls it). One pass, no interim structure.
+        pub async fn read_all(mut body: Box<dyn TransportBody>) -> std::result::Result<Vec<u8>, String> {
+            let mut out = Vec::new();
+            while let Some(chunk) = body.next_chunk().await? {
+                out.extend_from_slice(&chunk);
             }
+            Ok(out)
         }
 
-        /// Wrap a buffered exchange as a streaming answer (the
-        /// `execute_streaming` body of a transport that only buffers):
-        /// one chunk, then done.
-        pub fn buffered_as_stream(response: TransportResponse) -> TransportStreamResponse {
-            TransportStreamResponse {
-                status: response.status,
-                headers: Vec::new(),
-                body: Box::new(BufferedTransportBody(response.body)),
-            }
-        }
-
-        /// The pluggable HTTP backend. The default is reqwest (the
-        /// `reqwest` feature); a target reqwest cannot serve — a wasm
-        /// component, say — injects its own with
-        /// [`#client_ident::with_transport`]. TWO faces, both
-        /// required: `execute` is the buffered contract (the generated
-        /// API methods), `execute_streaming` is the streaming one (a
-        /// body that answers chunk by chunk — never held whole). A
-        /// transport that can only buffer answers `execute_streaming`
-        /// with [`buffered_as_stream`] over its `execute`.
+        /// The pluggable HTTP backend — ONE face, STREAMING: the
+        /// exchange's answer carries the status, the headers and the
+        /// body STILL STREAMING; buffering is the caller's own choice
+        /// ([`read_all`] when it wants whole bytes). The built-in
+        /// reqwest client (the `reqwest` feature) needs no transport;
+        /// a target reqwest cannot serve — a wasm component speaking
+        /// `wasi:http`, say — injects its own with
+        /// [`#client_ident::with_transport`], bridging the platform's
+        /// streams directly.
         pub trait Transport: Send + Sync + 'static {
-            fn execute(&self, request: TransportRequest) -> TransportFuture<TransportResponse>;
             fn execute_streaming(
                 &self,
                 request: TransportRequest,
@@ -366,7 +344,10 @@ pub fn generate_client_impl(
                 #auth_headers
 
                 // The injected transport, when present, carries every
-                // call — reqwest never links into its path.
+                // call — reqwest never links into its path. The
+                // exchange STREAMS; the typed API methods buffer here
+                // (an application that streams keeps the body and
+                // never buffers).
                 if let Some(transport) = &self.transport {
                     let mut full_url = url;
                     if let Some(q) = query {
@@ -383,7 +364,7 @@ pub fn generate_client_impl(
                         headers.push(("content-type".to_string(), "application/json".to_string()));
                     }
                     let response = transport
-                        .execute(TransportRequest {
+                        .execute_streaming(TransportRequest {
                             method: method.to_string(),
                             url: full_url,
                             headers,
@@ -391,13 +372,15 @@ pub fn generate_client_impl(
                         })
                         .await
                         .map_err(ApiError::Transport)?;
-                    if !(200..300).contains(&response.status) {
+                    let status = response.status;
+                    let bytes = read_all(response.body).await.map_err(ApiError::Transport)?;
+                    if !(200..300).contains(&status) {
                         return Err(ApiError::Status {
-                            status: response.status,
-                            body: String::from_utf8_lossy(&response.body).to_string(),
+                            status,
+                            body: String::from_utf8_lossy(&bytes).to_string(),
                         });
                     }
-                    return Ok(serde_json::from_slice(&response.body)?);
+                    return Ok(serde_json::from_slice(&bytes)?);
                 }
 
                 #[cfg(feature = "reqwest")]

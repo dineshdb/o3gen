@@ -588,26 +588,30 @@ struct FixedTransport {
     seen: std::sync::Mutex<Option<crate::TransportRequest>>,
 }
 
-impl crate::Transport for FixedTransport {
-    fn execute(&self, request: crate::TransportRequest) -> crate::TransportFuture<crate::TransportResponse> {
-        *self.seen.lock().unwrap() = Some(request);
-        let response = crate::TransportResponse {
-            status: self.status,
-            body: self.body.clone(),
-        };
-        Box::pin(async move { Ok(response) })
-    }
+struct FixedBody(Vec<u8>);
 
+impl crate::TransportBody for FixedBody {
+    fn next_chunk(&mut self) -> crate::TransportFuture<Option<Vec<u8>>> {
+        let chunk = std::mem::take(&mut self.0);
+        Box::pin(async move { Ok::<_, String>(if chunk.is_empty() { None } else { Some(chunk) }) })
+    }
+}
+
+impl crate::Transport for FixedTransport {
     fn execute_streaming(
         &self,
         request: crate::TransportRequest,
     ) -> crate::TransportFuture<crate::TransportStreamResponse> {
         *self.seen.lock().unwrap() = Some(request);
-        let response = crate::TransportResponse {
-            status: self.status,
-            body: self.body.clone(),
-        };
-        Box::pin(async move { Ok(crate::buffered_as_stream(response)) })
+        let status = self.status;
+        let body = self.body.clone();
+        Box::pin(async move {
+            Ok(crate::TransportStreamResponse {
+                status,
+                headers: Vec::new(),
+                body: Box::new(FixedBody(body)),
+            })
+        })
     }
 }
 
@@ -670,12 +674,6 @@ struct ChunkedTransport {
 }
 
 impl crate::Transport for ChunkedTransport {
-    fn execute(&self, _request: crate::TransportRequest) -> crate::TransportFuture<crate::TransportResponse> {
-        let body = self.chunks.iter().flatten().cloned().collect();
-        let response = crate::TransportResponse { status: self.status, body };
-        Box::pin(async move { Ok(response) })
-    }
-
     fn execute_streaming(
         &self,
         _request: crate::TransportRequest,
@@ -710,14 +708,17 @@ async fn test_transport_streaming_chunks() {
         ]
         .into(),
     };
-    let mut response = crate::Transport::execute_streaming(&transport, crate::TransportRequest {
+    let mut response = crate::Transport::execute_streaming(
+        &transport,
+        crate::TransportRequest {
             method: "POST".into(),
             url: "http://transport.test/v1/chat/completions".into(),
             headers: vec![],
             body: None,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(response.status, 200);
     assert_eq!(
         response
